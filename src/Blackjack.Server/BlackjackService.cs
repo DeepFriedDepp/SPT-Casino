@@ -265,7 +265,11 @@ public class BlackjackService(
         return Success(view, sessionId, session) with { Warning = warning };
     }
 
-    private PlayerStats StatsCore(MongoId sessionId) => stats.Get(sessionId);
+    // Snapshot, not the live record: the JSON serialiser walks this in the HTTP layer
+    // after the gate has been let go, and a concurrent settle adding a currency key
+    // would throw "Collection was modified" onto the request thread. See
+    // PlayerStats.Snapshot.
+    private PlayerStats StatsCore(MongoId sessionId) => stats.Get(sessionId).Snapshot();
 
     private PingResponse PingCore(MongoId sessionId)
     {

@@ -173,4 +173,51 @@ public class StatsTests
         Assert.Equal(net, view.Net);
         stats.Record(view, Wallet.Roubles, 0);
     }
+
+    /// <summary>
+    /// A snapshot does not move when the live record does.
+    ///
+    /// The stats route hands its result to the HTTP layer, which serialises it after the
+    /// service has returned and let the session's gate go. If that were the live object,
+    /// the serialiser would be walking `ByCurrency` while a concurrent settle added a key
+    /// to it -- `Dictionary` bumps its version on Add and the enumerator throws
+    /// `Collection was modified` onto the request thread. The gate cannot help: by then
+    /// nobody holds it.
+    ///
+    /// Asserted on `ByCurrency`'s VALUES as well as the dictionary itself, because
+    /// `Record` mutates `CurrencyStats` in place. A shallow copy would pass an
+    /// `Assert.NotSame` on the dictionary and still hand the reader counters that move,
+    /// which is the shape of fix that looks right and closes nothing.
+    /// </summary>
+    [Fact]
+    public void ASnapshotDoesNotChangeWhenTheLiveRecordDoes()
+    {
+        var live = new PlayerStats();
+
+        var table = new BlackjackTable(new Rules(), Shoe.Stacked("KS KH 5D 7C".Split(' ').Select(Card.Parse)));
+        table.Deal(Wager);
+        live.Record(table.Stand(), Wallet.Roubles, 0);
+
+        var taken = live.Snapshot();
+        var roundsWhenTaken = taken.RoundsPlayed;
+        var wageredWhenTaken = taken.ByCurrency[nameof(Wallet.Roubles)].Wagered;
+
+        // A second round lands after the snapshot was handed over.
+        var second = new BlackjackTable(new Rules(), Shoe.Stacked("KS KH 5D 7C".Split(' ').Select(Card.Parse)));
+        second.Deal(Wager);
+        live.Record(second.Stand(), Wallet.Roubles, 0);
+
+        Assert.Equal(2, live.RoundsPlayed);
+        Assert.Equal(roundsWhenTaken, taken.RoundsPlayed);
+
+        Assert.NotSame(live.ByCurrency, taken.ByCurrency);
+        Assert.NotSame(
+            live.ByCurrency[nameof(Wallet.Roubles)],
+            taken.ByCurrency[nameof(Wallet.Roubles)]);
+
+        Assert.Equal(wageredWhenTaken, taken.ByCurrency[nameof(Wallet.Roubles)].Wagered);
+        Assert.NotEqual(
+            live.ByCurrency[nameof(Wallet.Roubles)].Wagered,
+            taken.ByCurrency[nameof(Wallet.Roubles)].Wagered);
+    }
 }

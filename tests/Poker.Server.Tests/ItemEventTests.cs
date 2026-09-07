@@ -169,7 +169,7 @@ public class ItemEventTests
         // a bare error to argue with.
         var harness = Build();
         await harness.Events.Sit(Sit(), Session, new ItemEventRouterResponse());
-        harness.Events.Deal(new PokerDealAction(), Session, new ItemEventRouterResponse());
+        await harness.Events.Deal(new PokerDealAction(), Session, new ItemEventRouterResponse());
 
         var reply = await harness.Events.Act(
             new PokerActAction { Move = "Fold", To = 0 }, Session, new ItemEventRouterResponse());

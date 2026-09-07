@@ -57,6 +57,49 @@ public class PlayerStats
     public Dictionary<string, CurrencyStats> ByCurrency { get; set; } = [];
 
     /// <summary>
+    /// A detached copy, for a reader that will walk this outside the session's gate.
+    ///
+    /// <see cref="StatsStore.Get"/> hands out the live record, and the thing that reads
+    /// it is a JSON serialiser running in the HTTP layer -- long after the service
+    /// returned and let the session go. Walking <see cref="ByCurrency"/> there while
+    /// <see cref="Record"/> adds a key to it throws `Collection was modified` onto the
+    /// request thread: `Dictionary` bumps its version on Add and the enumerator notices.
+    /// So the walk happens here instead, where the service still holds the gate.
+    ///
+    /// Deep as far as it needs to be. <see cref="CurrencyStats"/> is mutated in place by
+    /// <see cref="Record"/>, so copying the dictionary and sharing its values would hand
+    /// the reader counters that still move -- a shallow copy would look like a fix and
+    /// close nothing.
+    ///
+    /// Slots has the same method for the same reason. If a third table grows a stats
+    /// route, it needs this too.
+    /// </summary>
+    public PlayerStats Snapshot() => new()
+    {
+        RoundsPlayed = RoundsPlayed,
+        HandsPlayed = HandsPlayed,
+        Wins = Wins,
+        Losses = Losses,
+        Pushes = Pushes,
+        Blackjacks = Blackjacks,
+        Busts = Busts,
+        CurrentStreak = CurrentStreak,
+        BestStreak = BestStreak,
+        FirstPlayedUtc = FirstPlayedUtc,
+        LastPlayedUtc = LastPlayedUtc,
+        ByCurrency = ByCurrency.ToDictionary(
+            entry => entry.Key,
+            entry => new CurrencyStats
+            {
+                RoundsPlayed = entry.Value.RoundsPlayed,
+                Wagered = entry.Value.Wagered,
+                Returned = entry.Value.Returned,
+                BestRound = entry.Value.BestRound,
+                WorstRound = entry.Value.WorstRound,
+            }),
+    };
+
+    /// <summary>
     /// Folds a settled round in. Pure and self-contained, so the whole of the
     /// accounting is testable without touching a file or a server.
     /// </summary>

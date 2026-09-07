@@ -47,7 +47,7 @@ public class MachineTests
         var stops = Enumerable.Range(0, Reels.Count).Select(r => StopWith(r, Symbol.Cola)).ToArray();
 
         var pull = machine.StopAt(stops, 1_000);
-        var win = Assert.Single(pull.Wins.Where(w => w.Symbol == Symbol.Cola));
+        var win = Assert.Single(pull.Wins, w => w.Symbol == Symbol.Cola);
 
         var expectedWays = 1;
 
