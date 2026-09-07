@@ -599,6 +599,34 @@ the server half, deliberately, because so much of it has still only run once.
 
 ## Current state
 
+**2026-09-07 -- blackjack has shared tables.** Two to seven people at one felt, in
+casino 1.3.0, table version 1.2.0. What it is and where it deliberately differs from
+poker's is in `docs/memory/2026-09-07-shared-blackjack.md`; the short version:
+
+- **One view, broadcast to everybody.** Every player's cards are face up -- that is the
+  game -- and the only concealed card is the dealer's hole card, hidden from everybody
+  equally by `BlackjackTable.ViewTable`. Poker needs a view per seat; copying that here
+  would make the game wrong.
+- **A seat costs nothing.** No buy-in and no stack: a wager is taken and settled inside
+  one round, so between rounds a box owes nothing and is owed nothing.
+- **Betting and dealing are two routes**, and anybody seated may deal. A table only its
+  host could start stops dead the moment that person walks away.
+- **The turn is a seat, not a phase.** `Phase == "PlayerTurn"` is true while somebody
+  else plays.
+- Real PMC nicknames from the first commit, never the engine's "You" fallback -- see
+  `IProfileGateway.NameOf` for what that cost poker at a live table.
+
+Server: `SharedBlackjackService`, `SharedBlackjackStore`, `SharedBlackjackCallbacks`,
+`SharedBlackjackRouter` on `/blackjack/shared/*`. Client:
+`Blackjack.Client/SharedBlackjackApi.cs` and `BlackjackSharedPanel.cs`, the second half
+of a now-`partial` `BlackjackPanel`.
+
+**And a money defect this turned up in shipped poker**, closed on both sides:
+`docs/memory/2026-09-07-one-escrow-row-two-tables.md`. One escrow row per session could
+not serve a private table and a shared one at once, and opening the solo panel while
+seated at a shared table refunded the shared stake as an orphan. **You are at one table**
+is now enforced by both services.
+
 **2026-09-07 -- this table now runs on SPT 4.0.13.** Everything below predates
 that and describes the 4.1.x line. The `spt-4.0.13` branch retargets the whole
 tree to net9.0 and `SPTarkov.*` 4.0.13, moves the `SptVersion` gate to `~4.0.13`,

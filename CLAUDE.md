@@ -14,8 +14,8 @@ all four; everything specific lives next door and is much longer:
 
 | Table | Notes | State |
 | --- | --- | --- |
-| Blackjack | `docs/blackjack.md` | Plays for roubles. 1.1.0 is what other people have |
-| Poker | `docs/poker.md` | Plays for roubles. Shipped at 1.0.0 |
+| Blackjack | `docs/blackjack.md` | Roubles and five other wallets. **Shared tables** since casino 1.3.0 |
+| Poker | `docs/poker.md` | Plays for roubles. **Shared tables** since casino 1.2.0 |
 | Roulette | `docs/roulette.md` | Plays for roubles as of 2026-09-05. Ships inside the casino |
 | Slots | `docs/slots.md` | Roubles, dollars or euros. Shipped in casino 1.1.0, with AUTO and SPEED |
 
@@ -198,6 +198,28 @@ it covers, not how many.
 **Write `MoneyInvariantTests` before the settlement, not after.** An end-of-run balance
 check misses errors that cancel, and a settlement written first gets tests shaped around
 what it already does rather than around what it owes.
+
+### One escrow row per session, so one table per game
+
+`escrow-<table>.json` holds **one** `OutstandingStake`/`OutstandingStack` per session.
+That was correct while a player could only be at their own table, and shared tables gave
+a session a second place to owe from.
+
+It is not a miscount if you get it wrong. Both `RefundAbandoned` methods decide a stake is
+orphaned by asking whether the **private** store has anything for that player, so a live
+shared stake fails the test and is handed back — and one of the places that runs is
+`State`, which is to say **opening the panel**. Proved by test, guard removed: 2,000,000
+roubles back in the stash with the chips still on the felt, then paid out again on
+standing up.
+
+**So: a player is at one poker table, and one blackjack table.** Enforced from both sides
+— the solo service refuses somebody at a shared table *and* stops refunding their stake;
+the shared service refuses a seat while escrow holds anything. Either half alone leaves
+the opposite order open. Poker and blackjack at the same time is still fine: the escrow
+files are separate, which is also why `Casino.Server.TableClaims` is one instance per
+game rather than one for the casino.
+
+See `docs/memory/2026-09-07-one-escrow-row-two-tables.md`.
 
 ### One player, one thing at a time
 
