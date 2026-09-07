@@ -146,6 +146,13 @@ namespace Casino.Client
             // panel opens would mean the first push after sitting down races the
             // handshake.
             Socket = new CasinoSocketClient();
+
+            // Everything the server pushes goes out through Casino.Shared.Host, which is
+            // the seam the panels can see. They live in projects that know nothing about
+            // websockets -- see Host.Pushed -- so this is the one place the two halves
+            // are introduced. Raised from Pump, on this thread, which is what lets a
+            // handler draw directly.
+            Socket.MessageReceived += Shared.Host.Push;
             Socket.Open();
 
             Log.LogInfo($"[Casino] client loaded -- {Games.All.Count} tables");

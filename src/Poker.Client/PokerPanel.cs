@@ -18,6 +18,17 @@ namespace Poker.Client
     /// works out who won, and never knows a card the server did not send. When the
     /// engine refuses a move it answers with the real view attached, so the fix for a
     /// client that has drifted is simply to draw what came back.
+    ///
+    /// **Two kinds of table come through here, and one set of drawing code draws both.**
+    /// The solo table is what everybody has and stays the default; a shared table is the
+    /// same view over a different set of routes, with other people in some of the seats.
+    /// <see cref="_shared"/> is the only thing that differs at the point a request is
+    /// made -- everything below <see cref="Render"/> reads a view and does not care where
+    /// it came from, which is what stopped the shared table becoming a second panel.
+    ///
+    /// At a shared table the view also arrives unasked, pushed down the casino's socket
+    /// when somebody else moves. That is the only route by which this panel redraws
+    /// without the player pressing anything; see <see cref="OnPushed"/>.
     /// </summary>
     internal static class PokerPanel
     {
@@ -88,6 +99,20 @@ namespace Poker.Client
         private static readonly Color Ink = new Color(0.88f, 0.86f, 0.80f, 1f);
         private static readonly Color Dim = new Color(0.50f, 0.49f, 0.46f, 1f);
 
+        /// <summary>
+        /// Another person, as opposed to a bot. Cool where the rest of the table is warm,
+        /// because it has to be told apart at a glance from the gold that means "you" and
+        /// the plain ink that means "a bot".
+        ///
+        /// Colour rather than a word, and that is a real trade rather than laziness: the
+        /// plaque's second line is the stack and the bet, which is the thing actually
+        /// being read during a hand, and a tag pushed in beside it would be competing
+        /// with it every street. So the seat says "somebody is sitting here" three ways
+        /// at once -- this colour on the name, a heavier border, and a dot in the corner
+        /// -- and none of them takes a line away from the numbers.
+        /// </summary>
+        private static readonly Color Person = new Color(0.45f, 0.68f, 0.86f, 1f);
+
         private static GameObject _root;
         private static TMP_FontAsset _font;
 
@@ -96,6 +121,38 @@ namespace Poker.Client
         private static RectTransform _seatLayer;
         private static RectTransform _actionRow;
         private static TextMeshProUGUI _status;
+
+        // The shared-table lobby: a sheet over the felt listing what is open, because a
+        // list of tables with stakes and seat counts on it does not fit in the one status
+        // line the rest of the panel says everything in.
+        private static GameObject _lobbySheet;
+        private static RectTransform _lobbyRows;
+        private static TextMeshProUGUI _lobbyNote;
+
+        /// <summary>
+        /// Whether the table on screen is a shared one, and so which set of routes an
+        /// action goes to.
+        ///
+        /// False everywhere the solo table is involved, which is what keeps the solo game
+        /// exactly what it was: with this false, every path below is the one that shipped.
+        /// It means "the table being drawn is shared" rather than "this player is seated
+        /// at a shared table somewhere" -- those differ while the lobby is up, and the
+        /// narrower reading is the one that decides correctly what a button does.
+        /// </summary>
+        private static bool _shared;
+
+        /// <summary>
+        /// Which shared table, when it is known, so a push meant for another one is
+        /// ignored.
+        ///
+        /// Null is normal rather than a fault. Opening a table gets the view back but not
+        /// the id -- the server names it -- and nothing else needs one, because every
+        /// shared route keys off the session. So this is learned where it is cheap (the
+        /// lobby list, and joining, both of which name the table already) and adopted from
+        /// the first push otherwise. Adopting is safe: the server pushes a table only to
+        /// the seats sitting at it, and a player can only be at one.
+        /// </summary>
+        private static string _tableId;
 
         // What the player is asking to raise to. Held between redraws because the
         // whole action strip is rebuilt whenever the view changes.
@@ -153,6 +210,12 @@ namespace Poker.Client
                 Canvas.ForceUpdateCanvases();
                 LayoutRebuilder.ForceRebuildLayoutImmediate((RectTransform)_root.transform);
 
+                // Before the first request, not after: a hand dealt by somebody else
+                // between the state call and the subscription would be a move this panel
+                // never hears about, and the table would sit looking frozen until the
+                // next one.
+                Listen();
+
                 // Resume rather than assume: a hand can still be live from an earlier
                 // visit, and /poker/state is what says so. Its failure is the ordinary
                 // "not at a table" case, not an error worth showing as one.
@@ -166,9 +229,10 @@ namespace Poker.Client
 
                 if (Ok(state))
                 {
+                    _shared = false;
                     Render(state);
                 }
-                else
+                else if (!ResumeShared())
                 {
                     ShowLobby();
                 }
@@ -196,6 +260,11 @@ namespace Poker.Client
             {
                 return;
             }
+
+            // Straight away rather than when the fade finishes. A push landing during the
+            // fade would redraw a table on its way out, and -- worse -- a subscription
+            // left behind is a second one on the next open, which draws every move twice.
+            Deafen();
 
             _closing = true;
 
@@ -381,11 +450,23 @@ namespace Poker.Client
             // drags fails to merge against an item that is no longer there.
             ProfileSync.Request("PokerSync");
 
+            // Said rather than assumed. A player who was at a shared table, stood up and
+            // then sat down alone would otherwise send their next fold to the shared
+            // routes, which refuse it -- correctly, and confusingly.
+            _shared = false;
+            _tableId = null;
+
             Render(reply);
         }
 
         private static void Leave()
         {
+            if (_shared)
+            {
+                LeaveShared();
+                return;
+            }
+
             PokerApi.Leave();
 
             // The chips have just come back as currency, so the same applies in the
@@ -397,7 +478,7 @@ namespace Poker.Client
 
         private static void Deal()
         {
-            var reply = PokerApi.Deal();
+            var reply = _shared ? SharedPokerApi.Deal() : PokerApi.Deal();
 
             if (!Ok(reply))
             {
@@ -418,7 +499,7 @@ namespace Poker.Client
 
         private static void Act(string move, int to = 0)
         {
-            var reply = PokerApi.Act(move, to);
+            var reply = _shared ? SharedPokerApi.Act(move, to) : PokerApi.Act(move, to);
 
             if (reply == null)
             {
@@ -440,12 +521,360 @@ namespace Poker.Client
             }
         }
 
+        // ---------------------------------------------------- shared tables: the actions
+
+        /// <summary>
+        /// Puts the player back at the shared table they are already sitting at, if they
+        /// are sitting at one. Answers whether it drew anything.
+        ///
+        /// Asked only after the solo table has said no, so the ordinary player -- who has
+        /// never opened a shared table and never will -- pays nothing for it beyond one
+        /// request on a panel that has just made another one. It is worth that much: the
+        /// shared seat holds a real stack in escrow, and reopening the panel to be offered
+        /// a fresh buy-in while a stack of yours is sitting on a table somewhere is the
+        /// sort of thing a player only works out after paying twice.
+        /// </summary>
+        private static bool ResumeShared()
+        {
+            var state = SharedPokerApi.State();
+
+            if (!Ok(state) || state["Table"] == null)
+            {
+                return false;
+            }
+
+            _shared = true;
+            Render(state);
+
+            return true;
+        }
+
+        /// <summary>
+        /// Asks the server what is open and draws the list.
+        ///
+        /// Every entry into this lobby is a button press, so the request is made the same
+        /// way every other one here is. There is no timer behind it: a lobby that refetches
+        /// itself would be a request every few seconds for the whole time somebody leaves
+        /// the panel sitting open, and the socket -- not polling -- is what keeps a table
+        /// in view being live.
+        /// </summary>
+        private static void ShowSharedLobby(string note = null)
+        {
+            _lastReply = null;
+            _shared = false;
+
+            SetBoard(null);
+            ClearSeats();
+            SetPot(null);
+
+            var reply = SharedPokerApi.Tables();
+            var yours = (string)reply?["YourTable"];
+
+            _tableId = yours;
+
+            ShowTables(reply?["Tables"] as JArray, yours, Ok(reply) ? null : ErrorOf(reply));
+
+            SetStatus(note ?? (yours != null
+                ? "You are already sitting at a table. Take your seat back rather than opening"
+                    + " another one -- your chips are at that one."
+                : "Joining a table takes its buy-in from your stash, the same as sitting down"
+                    + " alone does. Opening one seats you at " + TableSeats + " chairs for "
+                    + Roubles(BuyInChips) + " roubles; the empty ones play as bots until"
+                    + " somebody takes them."));
+
+            var actions = new List<KeyValuePair<string, Action>>();
+
+            if (yours != null)
+            {
+                actions.Add(Action("BACK TO YOUR TABLE", ReturnToShared));
+            }
+            else
+            {
+                actions.Add(Action("OPEN A TABLE", ConfirmOpen));
+            }
+
+            actions.Add(Action("REFRESH", () => ShowSharedLobby()));
+            actions.Add(Action("BACK", ShowLobby));
+            actions.Add(Action("CLOSE", Close));
+
+            BuildActions(actions);
+        }
+
+        private static void ReturnToShared()
+        {
+            var state = SharedPokerApi.State();
+
+            if (!Ok(state) || state["Table"] == null)
+            {
+                // The table is gone rather than merely unreachable -- somebody stood up
+                // last and it closed behind them. Say so from the lobby, which is where
+                // that leaves them.
+                ShowSharedLobby(ErrorOf(state) ?? "That table is gone.");
+                return;
+            }
+
+            _shared = true;
+            _raiseTo = 0;
+
+            Render(state);
+        }
+
+        /// <summary>
+        /// Asks before spending anything, exactly as <see cref="ConfirmSit"/> does and for
+        /// the same reason. The list stays on screen while it asks, so the table being
+        /// paid for is still the one being looked at.
+        /// </summary>
+        private static void ConfirmJoin(string tableId, int buyIn)
+        {
+            SetStatus(
+                "This will take " + Roubles(buyIn) + " roubles from your stash and put it on"
+                + " that table as chips. Whatever is left when you stand up comes back.");
+
+            BuildActions(new[]
+            {
+                Action("JOIN FOR " + Roubles(buyIn), () => JoinShared(tableId)),
+                Action("NOT YET", () => ShowSharedLobby()),
+            });
+        }
+
+        private static void JoinShared(string tableId)
+        {
+            var reply = SharedPokerApi.Join(tableId);
+
+            if (!Ok(reply))
+            {
+                // Still in the lobby, and the list is still the one that was drawn. The
+                // usual refusals -- the table filled up, or a hand started -- are answered
+                // by pressing refresh, so leaving the list up is the useful thing.
+                SetStatus(ErrorOf(reply) ?? "Could not join that table.");
+                return;
+            }
+
+            ProfileSync.Request("PokerSync");
+
+            _shared = true;
+            _tableId = tableId;
+            _raiseTo = 0;
+
+            Render(reply);
+        }
+
+        private static void ConfirmOpen()
+        {
+            SetStatus(
+                "This will take " + Roubles(BuyInChips) + " roubles from your stash and open a"
+                + " table others can join. The seats nobody takes play as bots, and whatever"
+                + " is left when you stand up comes back.");
+
+            BuildActions(new[]
+            {
+                Action("OPEN FOR " + Roubles(BuyInChips), OpenShared),
+                Action("NOT YET", () => ShowSharedLobby()),
+            });
+        }
+
+        private static void OpenShared()
+        {
+            var reply = SharedPokerApi.Open(seats: TableSeats, buyIn: BuyInChips, bigBlind: BigBlindChips);
+
+            if (!Ok(reply))
+            {
+                SetStatus(ErrorOf(reply) ?? "Could not open a table.");
+                return;
+            }
+
+            ProfileSync.Request("PokerSync");
+
+            _shared = true;
+
+            // The server names the table and the reply does not carry the name. Nothing
+            // needs it until a push arrives, and the first one says which table it is
+            // about -- see _tableId.
+            _tableId = null;
+            _raiseTo = 0;
+
+            Render(reply);
+        }
+
+        /// <summary>
+        /// Asks the server for the table again.
+        ///
+        /// On the strip whenever it is not this player's turn, which is exactly when a
+        /// push that never arrived would leave the screen frozen with nothing to press.
+        /// The socket reconnects on its own and this is not a substitute for it; it is
+        /// the one button that gets a player unstuck without closing the panel.
+        /// </summary>
+        private static void RefreshShared()
+        {
+            var state = SharedPokerApi.State();
+
+            if (!Ok(state) || state["Table"] == null)
+            {
+                ShowSharedLobby(ErrorOf(state) ?? "That table is gone.");
+                return;
+            }
+
+            Render(state);
+        }
+
+        private static void LeaveShared()
+        {
+            var reply = SharedPokerApi.Leave();
+
+            if (!Ok(reply))
+            {
+                // "Finish the hand first" is the one that happens, and the table it
+                // refers to is still on screen and still correct.
+                SetStatus(ErrorOf(reply) ?? "Could not stand up.");
+                return;
+            }
+
+            ProfileSync.Request("PokerSync");
+
+            _shared = false;
+            _tableId = null;
+
+            ShowSharedLobby((string)reply["Note"]);
+        }
+
+        // ---------------------------------------------------- shared tables: the push
+        /// <summary>
+        /// The delegate hung off the casino's push channel, kept so the same one can be
+        /// taken back off. Two delegates over one method compare equal, but holding the
+        /// one that was added is what makes that true rather than nearly true.
+        /// </summary>
+        private static Action<string> _listener;
+
+        /// <summary>
+        /// Subscribes to the casino's push channel.
+        ///
+        /// Through <see cref="Host"/> rather than by naming the socket, because this file
+        /// is compiled into TWO assemblies: Poker.Client, which still builds a standalone
+        /// plugin and has no websocket reference at all, and Casino.Client, which is what
+        /// ships and owns the socket. Naming `CasinoSocketClient` here breaks the first
+        /// build, and a project reference the other way round is a cycle.
+        ///
+        /// `Host` is already the seam for exactly this -- "the things the shared code
+        /// needs from whoever is hosting it" -- and it costs nothing to be the third.
+        /// Reflection was the other way across that gap and it worked, but a seam that
+        /// resolves by string survives a rename silently and then stops delivering, which
+        /// at a live table means everybody quietly stops seeing each other's moves.
+        ///
+        /// In the standalone plugin nothing ever pushes, so the event never fires and the
+        /// table falls back to asking. That is not a fault and is not reported as one.
+        /// </summary>
+        private static void Listen()
+        {
+            if (_listener != null)
+            {
+                return;
+            }
+
+            _listener = OnPushed;
+            Host.Pushed += _listener;
+        }
+
+        private static void Deafen()
+        {
+            var listener = _listener;
+            _listener = null;
+
+            if (listener != null)
+            {
+                Host.Pushed -= listener;
+            }
+        }
+
+        /// <summary>
+        /// Somebody else moved.
+        ///
+        /// **Raised on Unity's main thread**, from the pump the casino runs once a frame,
+        /// which is the whole reason that pump exists -- so this draws directly and needs
+        /// no dispatcher.
+        ///
+        /// The payload is one table as this seat is allowed to see it: other seats' cards
+        /// are absent from the object rather than flagged, so there is nothing here to be
+        /// careful with. Drawing it is the entire job.
+        /// </summary>
+        private static void OnPushed(string payload)
+        {
+            // Not while a solo table or the lobby is on screen. A player can be seated at
+            // a shared table and looking at something else, and the push is about the
+            // table, not about what is being drawn.
+            if (!_shared || _root == null || !_root.activeSelf || _closing)
+            {
+                return;
+            }
+
+            JObject message;
+
+            try
+            {
+                message = JObject.Parse(payload);
+            }
+            catch (Exception ex)
+            {
+                // One socket carries the whole casino, so something that is not a poker
+                // table is an ordinary thing to receive, not a fault.
+                PokerClientPlugin.Log.LogDebug("[Poker] ignored a push it could not read: " + ex.Message);
+                return;
+            }
+
+            var table = (string)message["Table"];
+
+            if (_tableId != null && !string.Equals(table, _tableId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var view = message["View"] as JObject;
+
+            if (view == null)
+            {
+                return;
+            }
+
+            _tableId = _tableId ?? table;
+
+            // The table moved, so an amount picked against the version before it did is
+            // no longer the amount that was meant.
+            _raiseTo = 0;
+
+            var kind = (string)message["Kind"];
+            var seated =
+                string.Equals(kind, "joined", StringComparison.Ordinal) ||
+                string.Equals(kind, "left", StringComparison.Ordinal);
+
+            Render(new JObject { ["Ok"] = true, ["Table"] = view }, keepStatus: seated);
+
+            if (seated)
+            {
+                // Both only ever arrive between hands, so nothing about the hand is being
+                // written over. Who it was is not worth saying: a seat somebody has just
+                // taken is named "Seat 3" by the server until they are dealt in.
+                SetStatus(string.Equals(kind, "joined", StringComparison.Ordinal)
+                    ? "Somebody took a seat."
+                    : "Somebody stood up.");
+            }
+        }
+
         // ---------------------------------------------------------------- rendering
 
+        /// <summary>
+        /// The way in, and it is still the solo one.
+        ///
+        /// A second button rather than a second screen in front of this one: playing alone
+        /// is what everybody has and what nearly everybody wants, and putting a choice
+        /// between a player and the table they have always sat at would be a cost paid by
+        /// all of them for a feature two of them use.
+        /// </summary>
         private static void ShowLobby()
         {
             _lastReply = null;
+            _shared = false;
+            _tableId = null;
 
+            HideTables();
             SetBoard(null);
             ClearSeats();
             SetPot(null);
@@ -458,7 +887,8 @@ namespace Poker.Client
 
             BuildActions(new[]
             {
-                Action("SIT DOWN", ConfirmSit),
+                Action("PLAY ALONE", ConfirmSit),
+                Action("SHARED TABLES", () => ShowSharedLobby()),
                 Action("CLOSE", Close),
             });
         }
@@ -480,13 +910,18 @@ namespace Poker.Client
             var awaiting = (bool?)table["AwaitingPlayer"] ?? false;
             var button = (int?)table["Button"] ?? -1;
 
+            // Which seat is being looked out of. Absent means seat 0, which is what a
+            // one-human table has always meant and where the solo player has always sat.
+            var viewer = (int?)table["ViewerSeat"] ?? 0;
+
+            HideTables();
             SetBoard(table["Community"]?.Select(c => (string)c).ToArray());
             SetPot(pot);
-            RenderSeats(table["Seats"] as JArray, button);
+            RenderSeats(table["Seats"] as JArray, button, viewer);
 
             if (!keepStatus)
             {
-                SetStatus(Headline(street, table));
+                SetStatus(Headline(street, table, viewer));
             }
 
             BuildActions(ActionsFor(street, awaiting, table["Options"] as JObject));
@@ -495,8 +930,16 @@ namespace Poker.Client
         /// <summary>
         /// One line saying where the hand is. At a showdown it says who won instead,
         /// because that is the only moment the player cannot read it off the table.
+        ///
+        /// Mid-hand it also names whoever the table is waiting on. That is not decoration
+        /// at a shared table: four of the five seats can be somebody else, none of them is
+        /// obliged to act quickly, and a street name on its own leaves a player looking at
+        /// a table that has not moved for ten seconds with no way to tell a slow friend
+        /// from a mod that has stopped working. Named whether the seat is a bot or a
+        /// person, because what is being said is "not you yet" and the difference between
+        /// those two is the wait, not the fault.
         /// </summary>
-        private static string Headline(string street, JObject table)
+        private static string Headline(string street, JObject table, int viewer)
         {
             if (string.Equals(street, "Idle", StringComparison.OrdinalIgnoreCase))
             {
@@ -505,14 +948,17 @@ namespace Poker.Client
 
             if (!string.Equals(street, "Showdown", StringComparison.OrdinalIgnoreCase))
             {
-                return street;
+                return street + Waiting(table, viewer);
             }
 
             var winners = (table["Seats"] as JArray)?
                 .Where(s => ((int?)s["Won"] ?? 0) > 0)
                 .Select(s =>
                 {
-                    var isPlayer = (bool?)s["IsPlayer"] == true;
+                    // Whether this is the seat being looked out of, not whether a person
+                    // sits in it: with several people at the table IsPlayer is true of all
+                    // of them, and every one of them would be told they had won.
+                    var isPlayer = ((int?)s["Index"] ?? -1) == viewer;
                     var name = isPlayer ? "You" : (string)s["Name"] ?? "A seat";
 
                     // "You wins". The seat's name is a third person and the player is a
@@ -535,7 +981,39 @@ namespace Poker.Client
                 : "Hand over.";
         }
 
-        private static void RenderSeats(JArray seats, int button)
+        /// <summary>
+        /// Whose move it is, as a clause to hang off the street.
+        ///
+        /// "Your move" is said at a shared table only, and that is the one place the solo
+        /// game would otherwise have read differently than it always has: alone, a view
+        /// comes back only once the bots have finished, so the actor is the player on
+        /// essentially every view and the line would have grown a phrase on every street
+        /// to say what the buttons underneath it already say. Somebody else being the
+        /// actor is worth naming at either kind of table, and alone it is rare enough to
+        /// be worth an explanation when it happens.
+        /// </summary>
+        private static string Waiting(JObject table, int viewer)
+        {
+            var actor = (int?)table["ActorSeat"];
+
+            if (!actor.HasValue)
+            {
+                return string.Empty;
+            }
+
+            if (actor.Value == viewer)
+            {
+                return _shared ? "     your move." : string.Empty;
+            }
+
+            var name = (table["Seats"] as JArray)?
+                .OfType<JObject>()
+                .FirstOrDefault(s => ((int?)s["Index"] ?? -1) == actor.Value);
+
+            return "     waiting for " + ((string)name?["Name"] ?? ("seat " + actor.Value)) + ".";
+        }
+
+        private static void RenderSeats(JArray seats, int button, int viewer)
         {
             ClearSeats();
 
@@ -548,19 +1026,27 @@ namespace Poker.Client
 
             foreach (var seat in all)
             {
-                BuildSeat(seat, button, all.Count);
+                BuildSeat(seat, button, all.Count, viewer);
             }
         }
 
         /// <summary>
         /// One seat, placed on the ellipse the felt is drawn as.
         ///
-        /// The player is always seat 0 in the engine and is always drawn at the
-        /// bottom, which is where the person at the keyboard expects to be sitting.
-        /// Where a seat is drawn is presentation and never reaches the engine: the
-        /// deal order is fixed by seat index, not by position on screen.
+        /// The seat being looked out of is always drawn at the bottom, which is where the
+        /// person at the keyboard expects to be sitting. That used to be seat 0 because
+        /// seat 0 was the only seat a person could have; it is now whichever seat this
+        /// view was built for, which is the same thing at a solo table. Where a seat is
+        /// drawn is presentation and never reaches the engine: the deal order is fixed by
+        /// seat index, not by position on screen.
+        ///
+        /// **Three kinds of occupant, not two.** IsPlayer means "a person sits here" and
+        /// is true of everybody at a shared table, so it can no longer answer "is this
+        /// me" -- the view carries ViewerSeat for that. Reading it the old way at a table
+        /// with two people would draw two seats as the player, both with the big cards,
+        /// both labelled YOU.
         /// </summary>
-        private static void BuildSeat(JObject seat, int button, int total)
+        private static void BuildSeat(JObject seat, int button, int total, int viewer)
         {
             var index = (int?)seat["Index"] ?? 0;
             var name = (string)seat["Name"] ?? ("Seat " + index);
@@ -569,9 +1055,11 @@ namespace Poker.Client
             var folded = (bool?)seat["Folded"] ?? false;
             var allIn = (bool?)seat["IsAllIn"] ?? false;
             var isTurn = (bool?)seat["IsTurn"] ?? false;
-            var isPlayer = (bool?)seat["IsPlayer"] ?? false;
             var hand = (string)seat["Hand"];
             var won = (int?)seat["Won"] ?? 0;
+
+            var isPlayer = index == viewer;
+            var isSomebody = ((bool?)seat["IsPlayer"] ?? false) && !isPlayer;
 
             // Cards are absent rather than blanked when they may not be seen, so an
             // empty list is the honest instruction to draw backs. Never key this off
@@ -584,7 +1072,7 @@ namespace Poker.Client
             holder.anchorMin = holder.anchorMax = new Vector2(0.5f, 0.5f);
             holder.pivot = new Vector2(0.5f, 0.5f);
             holder.sizeDelta = new Vector2(SeatWidth, isPlayer ? PlayerSeatHeight : SeatHeight);
-            holder.anchoredPosition = SeatPosition(index, total, isPlayer);
+            holder.anchoredPosition = SeatPosition(index, total, viewer, isPlayer);
 
             var column = holder.gameObject.AddComponent<VerticalLayoutGroup>();
             column.spacing = 5f;
@@ -595,7 +1083,9 @@ namespace Poker.Client
             column.childControlHeight = false;
 
             BuildSeatCards(holder, cards, isPlayer, folded);
-            BuildSeatPlaque(holder, name, stack, committed, folded, allIn, isTurn, isPlayer, index == button);
+
+            BuildSeatPlaque(
+                holder, name, stack, committed, folded, allIn, isTurn, isPlayer, isSomebody, index == button);
 
             // Only at a showdown, and only for a seat that reached one -- the server
             // fills Hand in exactly then.
@@ -691,17 +1181,21 @@ namespace Poker.Client
             bool allIn,
             bool isTurn,
             bool isPlayer,
+            bool isSomebody,
             bool hasButton)
         {
             var plaque = NewBox("Plaque", holder, Color.white);
             plaque.sizeDelta = new Vector2(SeatWidth, isPlayer ? 76f : 68f);
 
+            // Whose turn it is wins over who is sitting there, and has to: it changes
+            // every action and it is what the eye is looking for. Another person's seat
+            // takes the marking only while the table is not waiting on it.
             var face = plaque.GetComponent<Image>();
             face.sprite = Textures.RoundedBox(
                 8,
                 isTurn ? new Color(0.22f, 0.19f, 0.08f, 0.97f) : new Color(0.05f, 0.06f, 0.06f, 0.93f),
-                isTurn ? Gold : new Color(0.30f, 0.30f, 0.28f, 1f),
-                isTurn ? 3 : 1);
+                isTurn ? Gold : isSomebody ? Person : new Color(0.30f, 0.30f, 0.28f, 1f),
+                isTurn ? 3 : isSomebody ? 2 : 1);
             face.type = Image.Type.Sliced;
 
             var title = NewText(
@@ -714,7 +1208,7 @@ namespace Poker.Client
             // Inset, so a long name stops before the dealer badge rather than under it.
             title.rectTransform.sizeDelta = new Vector2(-52f, 28f);
             title.rectTransform.anchoredPosition = new Vector2(0f, -4f);
-            title.color = folded ? Dim : (isPlayer ? Gold : Ink);
+            title.color = folded ? Dim : (isPlayer ? Gold : isSomebody ? Person : Ink);
             title.overflowMode = TextOverflowModes.Ellipsis;
 
             var detail = folded
@@ -732,6 +1226,23 @@ namespace Poker.Client
             under.rectTransform.sizeDelta = new Vector2(-10f, 26f);
             under.rectTransform.anchoredPosition = new Vector2(0f, 6f);
             under.color = folded ? Dim : Ink;
+
+            // A dot in the corner the dealer badge does not use, for a seat somebody is
+            // sitting in. A shape rather than a letter or a word: the font is borrowed
+            // from whatever the game happens to have loaded, so anything beyond plain
+            // letters is a glyph that might not be in it, and there is no room for a word.
+            if (isSomebody)
+            {
+                var dot = NewBox("Player", plaque, Color.white);
+                dot.anchorMin = dot.anchorMax = new Vector2(1f, 1f);
+                dot.pivot = new Vector2(1f, 1f);
+                dot.sizeDelta = new Vector2(14f, 14f);
+                dot.anchoredPosition = new Vector2(-9f, -12f);
+
+                var dotFace = dot.GetComponent<Image>();
+                dotFace.sprite = Textures.RoundedBox(7, folded ? Dim : Person, Color.clear);
+                dotFace.type = Image.Type.Sliced;
+            }
 
             // The dealer button as a marker rather than a word: it moves every hand,
             // and a badge is read at a glance where a letter in a list is not.
@@ -759,8 +1270,15 @@ namespace Poker.Client
         /// Where a seat sits: out along its own direction until its plaque is clear of
         /// the cloth.
         ///
-        /// Seat 0 -- the player -- goes at the bottom and the rest run round from
-        /// there, so the table reads the way one looks at it from a chair.
+        /// The seat this view was built for goes at the bottom and the rest run round from
+        /// there, so the table reads the way one looks at it from a chair. The ring is
+        /// rotated by the viewer's index rather than the seats being reordered, which
+        /// keeps clockwise on screen the same as clockwise in the engine -- the dealer
+        /// button has to be seen to travel the right way, and two people watching the same
+        /// hand from different chairs have to agree about which way it went.
+        ///
+        /// At a solo table the viewer is seat 0 and the rotation is nothing, so this is
+        /// the arithmetic that already shipped.
         ///
         /// **Pushed out until it clears, rather than placed on a fixed ellipse.** The
         /// ellipse was 0.52 x 0.74 of the felt *rect*, which put the seats either side of
@@ -780,9 +1298,14 @@ namespace Poker.Client
         /// Measured from the cloth's own centre, which is not the felt's -- see
         /// <see cref="ClothRise"/>.
         /// </summary>
-        private static Vector2 SeatPosition(int index, int total, bool isPlayer)
+        private static Vector2 SeatPosition(int index, int total, int viewer, bool isPlayer)
         {
-            var degrees = total <= 1 ? -90f : -90f - (index * (360f / total));
+            // Positive remainder: a viewer in a later seat than this one gives a negative
+            // difference, and C# keeps the sign, which would throw the seat round the
+            // wrong side of the table.
+            var place = total <= 0 ? 0 : (((index - viewer) % total) + total) % total;
+
+            var degrees = total <= 1 ? -90f : -90f - (place * (360f / total));
             var radians = degrees * Mathf.Deg2Rad;
 
             var dx = Mathf.Cos(radians);
@@ -803,6 +1326,13 @@ namespace Poker.Client
         /// What the player may press. Built from the server's own list of legal moves
         /// rather than from the client's idea of the rules -- there is one authority
         /// on legality and it is not this side.
+        ///
+        /// **Nothing to bet with unless the table is waiting on this viewer.** That was
+        /// already true and did not need changing: <c>AwaitingPlayer</c> is now built per
+        /// viewer and means "waiting on you", and <c>Options</c> is null when it is not.
+        /// The server refuses an out-of-turn move anyway, so the reason for the gate here
+        /// is not safety -- it is that a live button which does nothing reads as a broken
+        /// mod, and at a shared table it would be live for four seats out of five.
         /// </summary>
         private static List<KeyValuePair<string, Action>> ActionsFor(
             string street, bool awaiting, JObject options)
@@ -816,6 +1346,12 @@ namespace Poker.Client
             if (betweenHands)
             {
                 actions.Add(Action("DEAL", Deal));
+
+                if (_shared)
+                {
+                    actions.Add(Action("REFRESH", RefreshShared));
+                }
+
                 actions.Add(Action("LEAVE", Leave));
                 actions.Add(Action("CLOSE", Close));
                 return actions;
@@ -823,6 +1359,15 @@ namespace Poker.Client
 
             if (!awaiting || options == null)
             {
+                // Somebody else's move. At a solo table that is a bot and it will be over
+                // in a moment; at a shared one it is a person who might have walked away,
+                // and the push that says they moved is the one thing here that can fail
+                // to arrive. So there is something to press that is not "close the table".
+                if (_shared)
+                {
+                    actions.Add(Action("REFRESH", RefreshShared));
+                }
+
                 actions.Add(Action("CLOSE", Close));
                 return actions;
             }
@@ -988,6 +1533,163 @@ namespace Poker.Client
             }
         }
 
+        // ------------------------------------------------------- the shared-table list
+
+        /// <summary>The columns the list is laid out in. Header and rows share them.</summary>
+        private const float ListWho = 300f;
+
+        private const float ListSeats = 250f;
+
+        private const float ListStakes = 300f;
+
+        private const float ListState = 160f;
+
+        private const float ListTail = 150f;
+
+        private const float ListRow = 1240f;
+
+        /// <summary>
+        /// How many tables are drawn before the rest are counted instead.
+        ///
+        /// The sheet is a fixed height with no scrolling, which is the right trade at the
+        /// numbers this sees: a shared table needs two people who have arranged to meet,
+        /// so a server with six of them at once does not happen. Five rows fit; anything
+        /// past that is a line saying how many were left out, which is at least honest
+        /// about it rather than silently drawing four of nine.
+        /// </summary>
+        private const int ListRows = 5;
+
+        private static void HideTables()
+        {
+            if (_lobbySheet != null && _lobbySheet.activeSelf)
+            {
+                _lobbySheet.SetActive(false);
+            }
+        }
+
+        private static void ShowTables(JArray tables, string yours, string error)
+        {
+            if (_lobbySheet == null || _lobbyRows == null || _lobbyNote == null)
+            {
+                return;
+            }
+
+            _lobbySheet.SetActive(true);
+
+            for (var i = _lobbyRows.childCount - 1; i >= 0; i--)
+            {
+                UnityEngine.Object.Destroy(_lobbyRows.GetChild(i).gameObject);
+            }
+
+            var all = tables?.OfType<JObject>().ToList() ?? new List<JObject>();
+
+            foreach (var table in all.Take(ListRows))
+            {
+                BuildTableRow(table, yours);
+            }
+
+            _lobbyNote.color = error != null ? new Color(0.80f, 0.42f, 0.36f, 1f) : Dim;
+
+            _lobbyNote.text =
+                error
+                ?? (all.Count > ListRows
+                    ? "and " + (all.Count - ListRows) + " more"
+                    : all.Count == 0
+                        ? "Nothing open. Open one and it appears here for anybody else on this server."
+                        : string.Empty);
+        }
+
+        /// <summary>
+        /// One listed table.
+        ///
+        /// A table with a hand in progress has no JOIN on it, because the server refuses
+        /// to seat anybody mid-hand -- it takes no money for the attempt, but a button
+        /// whose only outcome is a refusal is worse than no button. The state column says
+        /// why, and refreshing once the hand ends brings it back.
+        /// </summary>
+        private static void BuildTableRow(JObject table, string yours)
+        {
+            var id = (string)table["Id"] ?? "?";
+            var host = (string)table["HostName"] ?? "Somebody";
+            var seats = (int?)table["Seats"] ?? 0;
+            var people = (int?)table["People"] ?? 0;
+            var free = (int?)table["FreeSeats"] ?? 0;
+            var buyIn = (int?)table["BuyIn"] ?? 0;
+            var blind = (int?)table["BigBlind"] ?? 0;
+            var inHand = (bool?)table["InHand"] ?? false;
+
+            var mine = string.Equals(id, yours, StringComparison.Ordinal);
+
+            var row = NewBox("Table_" + id, _lobbyRows, Color.white);
+            row.sizeDelta = new Vector2(ListRow, 52f);
+
+            var face = row.GetComponent<Image>();
+            face.sprite = Textures.RoundedBox(
+                6,
+                mine ? new Color(0.13f, 0.12f, 0.06f, 0.95f) : new Color(0.09f, 0.10f, 0.10f, 0.95f),
+                mine ? Gold : new Color(1f, 1f, 1f, 0.10f),
+                mine ? 2 : 1);
+            face.type = Image.Type.Sliced;
+
+            var strip = row.gameObject.AddComponent<HorizontalLayoutGroup>();
+            strip.spacing = 10f;
+            strip.padding = new RectOffset(16, 16, 0, 0);
+            strip.childAlignment = TextAnchor.MiddleLeft;
+            strip.childForceExpandWidth = false;
+            strip.childForceExpandHeight = false;
+            strip.childControlWidth = false;
+            strip.childControlHeight = false;
+
+            Column(row, host + "     " + id, ListWho, mine ? Gold : Ink);
+            Column(row, people + " of " + seats + " seated     " + free + " free", ListSeats, Ink);
+            Column(row, Roubles(buyIn) + "     blind " + Roubles(blind), ListStakes, Ink);
+            Column(row, inHand ? "in a hand" : "between hands", ListState, inHand ? Dim : Ink);
+
+            // The button in a holder of its own, so a row with no button on it is still
+            // the same shape as one that has -- a horizontal layout measures what is in
+            // it, and columns that shift about between rows are unreadable as a table.
+            var tail = NewBox("Tail", row, Color.clear);
+            tail.sizeDelta = new Vector2(ListTail, 44f);
+
+            var holder = tail.gameObject.AddComponent<HorizontalLayoutGroup>();
+            holder.childAlignment = TextAnchor.MiddleCenter;
+            holder.childForceExpandWidth = false;
+            holder.childForceExpandHeight = false;
+            holder.childControlWidth = false;
+            holder.childControlHeight = false;
+
+            if (mine)
+            {
+                Column(tail, "YOUR SEAT", ListTail, Gold, TextAlignmentOptions.Center);
+                return;
+            }
+
+            if (inHand)
+            {
+                return;
+            }
+
+            var captured = id;
+            var stake = buyIn;
+
+            BuildButton(tail, "JOIN", () => ConfirmJoin(captured, stake));
+        }
+
+        private static TextMeshProUGUI Column(
+            Transform parent,
+            string text,
+            float width,
+            Color colour,
+            TextAlignmentOptions alignment = TextAlignmentOptions.Left)
+        {
+            var label = NewText("Column", parent, text, 17f, alignment);
+            label.rectTransform.sizeDelta = new Vector2(width, 40f);
+            label.color = colour;
+            label.overflowMode = TextOverflowModes.Ellipsis;
+
+            return label;
+        }
+
         // ---------------------------------------------------------------- building
 
         private static void Build()
@@ -1053,6 +1755,83 @@ namespace Poker.Client
 
             BuildStatus(canvasObject.transform);
             BuildActionRow(canvasObject.transform);
+            BuildLobbySheet(canvasObject.transform);
+        }
+
+        /// <summary>
+        /// The sheet the shared tables are listed on, built once and switched off.
+        ///
+        /// Over the felt rather than instead of it -- the same thing Blackjack does with
+        /// its stats -- so choosing a table still looks like standing in the room the
+        /// tables are in. It clears the status line and the action strip, which is what
+        /// decided its height; see StageRise for the other end of that constraint.
+        /// </summary>
+        private static void BuildLobbySheet(Transform parent)
+        {
+            var sheet = NewBox("Lobby", parent, Color.white);
+            sheet.anchorMin = sheet.anchorMax = new Vector2(0.5f, 0.5f);
+            sheet.pivot = new Vector2(0.5f, 0.5f);
+            sheet.sizeDelta = new Vector2(1300f, 470f);
+            sheet.anchoredPosition = new Vector2(0f, 70f);
+
+            var face = sheet.GetComponent<Image>();
+            face.sprite = Textures.RoundedBox(
+                14, new Color(0.05f, 0.06f, 0.06f, 0.95f), new Color(1f, 1f, 1f, 0.10f), 2);
+            face.type = Image.Type.Sliced;
+
+            var column = sheet.gameObject.AddComponent<VerticalLayoutGroup>();
+            column.spacing = 10f;
+            column.padding = new RectOffset(24, 24, 18, 18);
+            column.childAlignment = TextAnchor.UpperCenter;
+            column.childForceExpandWidth = false;
+            column.childForceExpandHeight = false;
+            column.childControlWidth = false;
+            column.childControlHeight = false;
+
+            var heading = NewText("Heading", sheet, "SHARED TABLES", 22f, TextAlignmentOptions.Center);
+            heading.rectTransform.sizeDelta = new Vector2(ListRow, 28f);
+            heading.color = Gold;
+
+            // A header row on the same columns as the rows, so the numbers underneath do
+            // not each have to carry a word saying what they are.
+            var header = NewBox("Header", sheet, Color.clear);
+            header.sizeDelta = new Vector2(ListRow, 22f);
+
+            var headerStrip = header.gameObject.AddComponent<HorizontalLayoutGroup>();
+            headerStrip.spacing = 10f;
+            headerStrip.padding = new RectOffset(16, 16, 0, 0);
+            headerStrip.childAlignment = TextAnchor.MiddleLeft;
+            headerStrip.childForceExpandWidth = false;
+            headerStrip.childForceExpandHeight = false;
+            headerStrip.childControlWidth = false;
+            headerStrip.childControlHeight = false;
+
+            Column(header, "HOST AND TABLE", ListWho, Dim).fontSize = 14f;
+            Column(header, "SEATS", ListSeats, Dim).fontSize = 14f;
+            Column(header, "BUY-IN AND BLIND", ListStakes, Dim).fontSize = 14f;
+            Column(header, "STATE", ListState, Dim).fontSize = 14f;
+            Column(header, string.Empty, ListTail, Dim).fontSize = 14f;
+
+            var rule = NewBox("Rule", sheet, new Color(1f, 1f, 1f, 0.10f));
+            rule.sizeDelta = new Vector2(ListRow, 2f);
+
+            _lobbyRows = NewBox("Rows", sheet, Color.clear);
+            _lobbyRows.sizeDelta = new Vector2(ListRow + 8f, 290f);
+
+            var rows = _lobbyRows.gameObject.AddComponent<VerticalLayoutGroup>();
+            rows.spacing = 6f;
+            rows.childAlignment = TextAnchor.UpperCenter;
+            rows.childForceExpandWidth = false;
+            rows.childForceExpandHeight = false;
+            rows.childControlWidth = false;
+            rows.childControlHeight = false;
+
+            _lobbyNote = NewText("Note", sheet, string.Empty, 18f, TextAlignmentOptions.Center);
+            _lobbyNote.rectTransform.sizeDelta = new Vector2(ListRow, 26f);
+            _lobbyNote.color = Dim;
+
+            _lobbySheet = sheet.gameObject;
+            _lobbySheet.SetActive(false);
         }
 
         /// <summary>
