@@ -120,18 +120,25 @@ public sealed class SharedTable
 ///
 /// ## The one invariant
 ///
-/// **A player is at one table at a time, shared or private.** `_whereTheyAre` is what
-/// makes that cheap to check and cheap to enforce -- without it, finding somebody's
-/// table means walking every table's seats on every request, and worse, two concurrent
-/// joins could seat one person twice with two buy-ins taken.
+/// **A player is at one table at a time, shared or private.** `Casino.Server.TableClaims`
+/// is what makes that cheap to check and cheap to enforce -- without it, finding
+/// somebody's table means walking every table's seats on every request, and worse, two
+/// concurrent joins could seat one person twice with two buy-ins taken.
 /// </summary>
 [Injectable(InjectionType.Singleton)]
 public class SharedTableStore
 {
     private readonly ConcurrentDictionary<string, SharedTable> _tables = new();
 
-    /// <summary>Session id to table id. The reverse index of every table's seats.</summary>
-    private readonly ConcurrentDictionary<string, string> _whereTheyAre = new();
+    /// <summary>
+    /// Session to table, and the "one table at a time" rule that guards a buy-in.
+    ///
+    /// Shared with blackjack's store rather than written twice -- see
+    /// <see cref="Casino.Server.TableClaims"/> for why that rule is money and not
+    /// bookkeeping, and why each game owns its own instance instead of the casino
+    /// having one.
+    /// </summary>
+    private readonly Casino.Server.TableClaims _claims = new();
 
     public IReadOnlyCollection<SharedTable> All => _tables.Values.ToList();
 
@@ -140,26 +147,18 @@ public class SharedTableStore
 
     /// <summary>The shared table this player is sitting at, or null if they are not at one.</summary>
     public SharedTable? For(MongoId sessionId) =>
-        _whereTheyAre.TryGetValue(sessionId.ToString(), out var tableId) ? Get(tableId) : null;
+        _claims.TableOf(sessionId) is { } tableId ? Get(tableId) : null;
 
     /// <summary>
     /// Claims a place for this player before anything expensive happens.
     ///
-    /// Returns false when they are already somewhere, which is the check that stops a
-    /// double-click on "join" taking two buy-ins for one seat. Deliberately an atomic
-    /// `TryAdd` rather than a read followed by a write: the whole reason this exists is
-    /// that two requests can arrive at once, and a check-then-act here would be the same
-    /// defect the money code spent a day removing.
-    ///
     /// The caller must <see cref="Release"/> it if the join then fails, or the player is
     /// stranded at a table they never sat down at.
     /// </summary>
-    public bool TryClaim(MongoId sessionId, string tableId) =>
-        _whereTheyAre.TryAdd(sessionId.ToString(), tableId);
+    public bool TryClaim(MongoId sessionId, string tableId) => _claims.TryClaim(sessionId, tableId);
 
     /// <summary>Gives up a claim. Safe to call when there is nothing to give up.</summary>
-    public void Release(MongoId sessionId) =>
-        _whereTheyAre.TryRemove(sessionId.ToString(), out _);
+    public void Release(MongoId sessionId) => _claims.Release(sessionId);
 
     public void Add(SharedTable table) => _tables[table.Id] = table;
 
@@ -177,13 +176,7 @@ public class SharedTableStore
             return;
         }
 
-        foreach (var seat in table.HumanSeats)
-        {
-            if (seat.SessionId is not null)
-            {
-                _whereTheyAre.TryRemove(seat.SessionId, out _);
-            }
-        }
+        _claims.ReleaseAll(table.HumanSessions);
     }
 
     /// <summary>
@@ -197,7 +190,7 @@ public class SharedTableStore
 
         foreach (var session in sitting)
         {
-            _whereTheyAre[session.ToString()] = table.Id;
+            _claims.Seed(session, table.Id);
         }
     }
 }
