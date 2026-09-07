@@ -356,6 +356,152 @@ public class SharedTableIntegrationTests
         Assert.True((await _service.OpenAsync(Open(), _bob, new ItemEventRouterResponse())).Ok);
     }
 
+    /// <summary>
+    /// **A player who closes the game mid-round must not freeze the table.**
+    ///
+    /// Blackjack has no fold, and standing up is refused while a round is running -- so a
+    /// seat whose player is gone holds the turn, and every other player at the table is
+    /// stuck behind it with their stake in escrow. Nothing in the process ever moves it
+    /// on: `LastSeenUtc` is written on every request and read nowhere.
+    ///
+    /// The only escape is a server restart, after which the table is gone and the stakes
+    /// come back as orphans -- which is a real recovery, but it is not one anybody should
+    /// have to reach for because their friend's game crashed.
+    /// </summary>
+    [Fact]
+    public async Task AnAbsentPlayerDoesNotFreezeTheTable()
+    {
+        await _service.OpenAsync(Open(), _alice, new ItemEventRouterResponse());
+        await _service.JoinAsync(TableId(), _bob);
+
+        await _service.BetAsync(Bet(), _alice, new ItemEventRouterResponse());
+        await _service.BetAsync(Bet(), _bob, new ItemEventRouterResponse());
+
+        var dealt = await _service.DealAsync(_alice, new ItemEventRouterResponse());
+
+        if (dealt.SharedTable!.ActiveSeat is not { } turn)
+        {
+            return;
+        }
+
+        // Whoever the table is waiting on has closed their game. Backdated rather than
+        // waited out, because a test that sleeps for the real timeout is a test nobody
+        // runs.
+        var absent = turn == 0 ? _alice : _bob;
+        var present = turn == 0 ? _bob : _alice;
+
+        _store.All.Single().LastSeenUtc[absent.ToString()] =
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 3600;
+
+        // The player who is still here asks for the table, which is what pressing REFRESH
+        // does. The absent seat should be stood and the round should move on without them.
+        var state = await _service.StateAsync(present);
+
+        Assert.True(
+            state.SharedTable!.ActiveSeat != turn,
+            $"The table is still waiting on box {turn}, whose player left an hour ago. "
+            + "Everybody else is stuck behind them and cannot even stand up.");
+    }
+
+    /// <summary>
+    /// And once the table has played on without them, everybody else is free.
+    ///
+    /// The freeze is only half the cost. The other half is that standing up is refused
+    /// mid-round, so the players who are still there cannot even walk away from their own
+    /// money -- which is why this asserts the escape and not merely the turn moving.
+    /// </summary>
+    [Fact]
+    public async Task ThePlayersLeftBehindCanFinishAndCashOut()
+    {
+        await _service.OpenAsync(Open(), _alice, new ItemEventRouterResponse());
+        await _service.JoinAsync(TableId(), _bob);
+
+        await _service.BetAsync(Bet(), _alice, new ItemEventRouterResponse());
+        await _service.BetAsync(Bet(), _bob, new ItemEventRouterResponse());
+
+        var dealt = await _service.DealAsync(_alice, new ItemEventRouterResponse());
+
+        if (dealt.SharedTable!.ActiveSeat is not { } turn)
+        {
+            return;
+        }
+
+        var absent = turn == 0 ? _alice : _bob;
+        var present = turn == 0 ? _bob : _alice;
+
+        _store.All.Single().LastSeenUtc[absent.ToString()] =
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 3600;
+
+        // The one who is still here plays their hand out, standing whenever it is theirs.
+        for (var guard = 0; guard < 20; guard++)
+        {
+            var view = (await _service.StateAsync(present)).SharedTable!;
+
+            if (view.Phase == RoundPhase.Settled)
+            {
+                break;
+            }
+
+            if (view.ActiveSeat is null)
+            {
+                break;
+            }
+
+            await _service.ActAsync(
+                new ActionRequest { Action = "Stand" },
+                present,
+                new ItemEventRouterResponse());
+        }
+
+        var left = await _service.LeaveAsync(present, new ItemEventRouterResponse());
+
+        Assert.True(left.Ok, $"Still trapped at the table: {left.Error}");
+
+        // And both were paid what the engine says they were owed -- the absent player
+        // included. Being disconnected is not a reason to lose a hand that won.
+        Assert.Null(_escrow.Get(present));
+        Assert.Null(_escrow.Get(absent));
+
+        foreach (var session in new[] { _alice, _bob })
+        {
+            Assert.True(
+                _bank.GetBalance(session, Wallet.Roubles) >= Stash - Stake,
+                $"{session} ended below their stake. Nobody may lose more than they bet.");
+        }
+    }
+
+    /// <summary>
+    /// The timeout must NOT fire for somebody who is simply thinking.
+    ///
+    /// A rule that also takes hands off present players is not a fix -- it is a worse bug
+    /// than the one it replaces, because it moves real money on a table somebody is
+    /// looking at.
+    /// </summary>
+    [Fact]
+    public async Task APlayerWhoIsStillHereKeepsTheirTurn()
+    {
+        await _service.OpenAsync(Open(), _alice, new ItemEventRouterResponse());
+        await _service.JoinAsync(TableId(), _bob);
+
+        await _service.BetAsync(Bet(), _alice, new ItemEventRouterResponse());
+        await _service.BetAsync(Bet(), _bob, new ItemEventRouterResponse());
+
+        var dealt = await _service.DealAsync(_alice, new ItemEventRouterResponse());
+
+        if (dealt.SharedTable!.ActiveSeat is not { } turn)
+        {
+            return;
+        }
+
+        // Nobody is backdated. Everyone was heard from a moment ago.
+        var other = turn == 0 ? _bob : _alice;
+
+        var view = (await _service.StateAsync(other)).SharedTable!;
+
+        Assert.Equal(turn, view.ActiveSeat);
+        Assert.Equal(RoundPhase.PlayerTurn, view.Phase);
+    }
+
     private string TableId() => _store.All.Single().Id;
 
     /// <summary>

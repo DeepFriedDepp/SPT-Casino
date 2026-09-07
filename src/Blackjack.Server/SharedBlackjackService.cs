@@ -70,6 +70,19 @@ public class SharedBlackjackService(
 {
     private const string Moved = "table";
 
+    /// <summary>
+    /// How long the table waits on a seat before playing on without it.
+    ///
+    /// Ninety seconds is chosen against the two ways it can be wrong. Too short and a
+    /// player who is thinking, or reading their mail, or was shot at in the hideout, gets
+    /// their hand taken off them -- and that is real money. Too long and a table whose
+    /// player has closed the game is dead for the rest of the evening.
+    ///
+    /// Nobody deliberates for ninety seconds over a blackjack hand. The panel also asks
+    /// for the table whenever it draws, so a client that is merely idle is still speaking.
+    /// </summary>
+    private static readonly TimeSpan QuietAfter = TimeSpan.FromSeconds(90);
+
     // ---- the gated entrance --------------------------------------------------------
 
     /// <summary>Open tables anybody could join. No gate: reads a snapshot, moves nothing.</summary>
@@ -153,6 +166,8 @@ public class SharedBlackjackService(
         }
 
         using var table = await tables.EnterAsync(seated.Id);
+        await AdvancePastTheAbsentAsync(seated, output);
+
         using var player = await sessions.EnterAsync(sessionId);
 
         return await BetCoreAsync(seated.Id, request, sessionId, output);
@@ -167,6 +182,8 @@ public class SharedBlackjackService(
         }
 
         using var table = await tables.EnterAsync(seated.Id);
+
+        await AdvancePastTheAbsentAsync(seated, output);
 
         return await DealCoreAsync(seated.Id, sessionId, output);
     }
@@ -183,6 +200,8 @@ public class SharedBlackjackService(
 
         using var table = await tables.EnterAsync(seated.Id);
 
+        await AdvancePastTheAbsentAsync(seated, output);
+
         return await ActCoreAsync(seated.Id, request, sessionId, output);
     }
 
@@ -194,12 +213,31 @@ public class SharedBlackjackService(
         }
 
         using var table = await tables.EnterAsync(seated.Id);
+        await AdvancePastTheAbsentAsync(seated, output);
+
         using var player = await sessions.EnterAsync(sessionId);
 
         return await LeaveCoreAsync(seated.Id, sessionId, output);
     }
 
-    public async Task<BlackjackResponse> StateAsync(MongoId sessionId)
+    /// <summary>
+    /// Test-only convenience. The throwaway response it builds is not initialised the way
+    /// SPT's inventory helpers expect, so anything with a real InventoryHelper behind it
+    /// must call the overload below -- same rule as <see cref="BlackjackService.State"/>.
+    /// </summary>
+    public Task<BlackjackResponse> StateAsync(MongoId sessionId) =>
+        StateAsync(sessionId, new ItemEventRouterResponse());
+
+    /// <summary>
+    /// This player's view of the table.
+    ///
+    /// **It takes an output because it can move money.** Asking for the table is what
+    /// notices that somebody else has gone -- see
+    /// <see cref="AdvancePastTheAbsentAsync"/> -- and playing on past them can settle the
+    /// round and pay everybody out. A read that is only ever a read would not need this;
+    /// this one is the clock the table runs on.
+    /// </summary>
+    public async Task<BlackjackResponse> StateAsync(MongoId sessionId, ItemEventRouterResponse output)
     {
         if (store.For(sessionId) is not { } seated)
         {
@@ -207,6 +245,10 @@ public class SharedBlackjackService(
         }
 
         using var table = await tables.EnterAsync(seated.Id);
+
+        // Before the touch, not after: this player has just been heard from, but whoever
+        // the table is waiting on has not, and it is that gap this is reading.
+        await AdvancePastTheAbsentAsync(seated, output);
 
         Touch(seated, sessionId);
 
@@ -468,6 +510,28 @@ public class SharedBlackjackService(
             return BlackjackResponse.Failed($"Unknown action '{request.Action}'.");
         }
 
+        // **Asked before a single rouble moves.** Double and Split cost the stake again,
+        // and the engine refuses either one for reasons the client cannot always know it
+        // has hit -- a Double is illegal the moment the hand has three cards, so a stale
+        // view, a double-click or a retried request all arrive as a Double that cannot
+        // happen. Charging first and discovering that afterwards is how a player is billed
+        // for a card they were never dealt.
+        //
+        // `AvailableActions` is the engine's own answer to "what may this seat do", which
+        // is the same thing the panel draws its buttons from.
+        if (action is PlayerAction.Double or PlayerAction.Split
+            && !table.Table.AvailableActions(seat).Contains(action))
+        {
+            return View(table, sessionId) with
+            {
+                Ok = false,
+                Error = $"{action} is not available on that hand.",
+            };
+        }
+
+        // What this action took, so it can be given back if the engine refuses anyway.
+        var charged = 0;
+
         try
         {
             switch (action)
@@ -479,30 +543,52 @@ public class SharedBlackjackService(
                     table.Table.Stand(seat);
                     break;
                 case PlayerAction.Double:
-                    // Doubling stakes the same amount again, so it costs money HERE and
-                    // has to be paid for before the engine is told. Refusing after the
-                    // card is dealt would be a free double.
-                    if (await ChargeDoubleAsync(table, seat, sessionId, output) is { } refusal)
+                {
+                    // Doubling stakes the same amount again, so it costs money HERE and has
+                    // to be paid for before the engine is told: the engine deals a card, and
+                    // a refusal after that is a card the player got for nothing.
+                    var charge = await ChargeDoubleAsync(table, seat, sessionId, output);
+
+                    if (charge.Response is not null)
                     {
-                        return refusal;
+                        return charge.Response;
                     }
 
+                    charged = charge.Taken;
                     table.Table.Double(seat);
                     break;
+                }
+
                 case PlayerAction.Split:
-                    if (await ChargeDoubleAsync(table, seat, sessionId, output) is { } splitRefusal)
+                {
+                    var charge = await ChargeDoubleAsync(table, seat, sessionId, output);
+
+                    if (charge.Response is not null)
                     {
-                        return splitRefusal;
+                        return charge.Response;
                     }
 
+                    charged = charge.Taken;
                     table.Table.Split(seat);
                     break;
+                }
+
                 default:
                     return BlackjackResponse.Failed($"Unknown action '{request.Action}'.");
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
         {
+            // **The money goes back.** The check above catches every refusal anybody has
+            // reproduced, but the engine is the authority and this is the path that runs
+            // when it refuses for a reason `AvailableActions` does not model. Without this
+            // the extra stake is simply destroyed: debited, held in escrow, then released
+            // at settlement against a hand that was never staked that much.
+            if (charged > 0)
+            {
+                await RefundChargeAsync(table, seat, sessionId, charged, output);
+            }
+
             // The engine is the authority on legality. A refusal means this client's view
             // drifted, so hand back the real one rather than a bare error.
             return View(table, sessionId) with { Ok = false, Error = ex.Message };
@@ -588,13 +674,29 @@ public class SharedBlackjackService(
     // ---- money -----------------------------------------------------------------------
 
     /// <summary>
+    /// What a charge did: either it was refused and nothing moved, or it took an amount
+    /// that the caller is now responsible for handing back if the action then fails.
+    ///
+    /// A struct rather than a nullable response because the amount has to travel with the
+    /// outcome. Returning only "refused or not" is what let a refused Double keep the
+    /// player's money -- the caller had nothing to give back with.
+    /// </summary>
+    private readonly record struct Charge(BlackjackResponse? Response, int Taken)
+    {
+        internal static Charge Refused(BlackjackResponse response) => new(response, 0);
+
+        internal static Charge Took(int amount) => new(null, amount);
+    }
+
+    /// <summary>
     /// Takes the extra stake a double or a split costs, before the engine is told.
     ///
-    /// Returns a refusal when it cannot be paid, and null when the money has moved.
     /// Charging first matters: the engine deals a card on a double, and a refusal after
-    /// that is a card the player got for nothing.
+    /// that is a card the player got for nothing. The cost of that ordering is that the
+    /// caller MUST hand the money back if the engine then refuses -- see
+    /// <see cref="RefundChargeAsync"/>, and the amount this returns for doing it with.
     /// </summary>
-    private async Task<BlackjackResponse?> ChargeDoubleAsync(
+    private async Task<Charge> ChargeDoubleAsync(
         SharedBlackjackTable table,
         int seat,
         MongoId sessionId,
@@ -606,14 +708,43 @@ public class SharedBlackjackService(
 
         if (!bank.TryDebit(sessionId, table.Wallet, extra, output))
         {
-            return BlackjackResponse.Failed(
+            return Charge.Refused(BlackjackResponse.Failed(
                 $"That needs another {extra:N0} and you have "
-                + $"{bank.GetBalance(sessionId, table.Wallet):N0}.");
+                + $"{bank.GetBalance(sessionId, table.Wallet):N0}."));
         }
 
         escrow.Hold(sessionId, table.Wallet, extra);
 
-        return null;
+        return Charge.Took(extra);
+    }
+
+    /// <summary>
+    /// Gives back a charge for an action the engine then refused.
+    ///
+    /// **Escrow is rewritten rather than released.** A release would drop the row entirely,
+    /// and the ORIGINAL bet is still live in it -- the player would be paid their winnings
+    /// at settlement but have nothing recorded if the server died first. So the row is put
+    /// back to what the seat has actually staked, which is what the engine says it is.
+    /// </summary>
+    private async Task RefundChargeAsync(
+        SharedBlackjackTable table,
+        int seat,
+        MongoId sessionId,
+        int amount,
+        ItemEventRouterResponse output)
+    {
+        using var player = await sessions.EnterAsync(sessionId);
+
+        bank.Credit(sessionId, table.Wallet, amount, output);
+
+        escrow.Release(sessionId);
+
+        var stillStaked = table.Table.Seats[seat].TotalWagered;
+
+        if (stillStaked > 0)
+        {
+            escrow.Hold(sessionId, table.Wallet, stillStaked);
+        }
     }
 
     /// <summary>
@@ -697,6 +828,94 @@ public class SharedBlackjackService(
             table.MaxBet,
             table.Wallet.ToString(),
             table.Table.Phase is not (RoundPhase.AwaitingBet or RoundPhase.Settled));
+
+    /// <summary>
+    /// Plays on past a seat whose player has gone.
+    ///
+    /// ## Why this has to exist
+    ///
+    /// **Blackjack has no fold, and standing up is refused mid-round.** So a seat whose
+    /// player closed the game holds the turn, and every other player at that table is stuck
+    /// behind it with their stake in escrow -- unable to act, unable to leave, for as long
+    /// as the server runs. `LastSeenUtc` was being written on every request and read
+    /// nowhere, which is how that shipped.
+    ///
+    /// ## Why standing, and not something cheaper
+    ///
+    /// Standing is the only action that is always legal and never spends money. The absent
+    /// player keeps the hand they were dealt and is paid whatever it wins -- they are not
+    /// punished for their game crashing, and nobody at the table gains from it either.
+    ///
+    /// Folding is not available; blackjack has no such thing. Busting them on purpose would
+    /// be taking their stake. Leaving the bet uncollected would be worse than both.
+    ///
+    /// ## Where it is called from
+    ///
+    /// Every gated entry point, **after the table gate and before any session gate** -- it
+    /// settles, and settling takes session gates. Calling it from inside a method that
+    /// already holds the leaver's session gate would deadlock, which is why
+    /// <see cref="LeaveAsync"/> calls it before taking that gate rather than inside
+    /// <see cref="LeaveCoreAsync"/>.
+    ///
+    /// Driven by requests rather than by a timer. A background sweep would need its own
+    /// gate discipline and would move money with nobody's request behind it; the panel asks
+    /// for the table whenever it draws, so somebody still at the table is the clock.
+    /// </summary>
+    private async Task AdvancePastTheAbsentAsync(
+        SharedBlackjackTable table,
+        ItemEventRouterResponse output)
+    {
+        if (table.Table.Phase != RoundPhase.PlayerTurn)
+        {
+            return;
+        }
+
+        var cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (long)QuietAfter.TotalSeconds;
+        var stood = false;
+
+        // Bounded rather than looped on the phase: several seats can be gone at once, and a
+        // seat that somehow refuses to stand would otherwise spin here forever holding the
+        // table gate. Seven boxes and a few split hands each is well inside twenty.
+        for (var guard = 0; guard < 20; guard++)
+        {
+            if (table.Table.ActiveSeat is not { } seat)
+            {
+                break;
+            }
+
+            if (!table.Occupants.TryGetValue(seat, out var who))
+            {
+                break;
+            }
+
+            // Absent means "has not been heard from", not "is not connected". The socket
+            // dropping is ordinary and does not mean somebody left the table.
+            if (table.LastSeenUtc.TryGetValue(who, out var seen) && seen > cutoff)
+            {
+                break;
+            }
+
+            try
+            {
+                table.Table.Stand(seat);
+                stood = true;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+            {
+                // The engine will not stand that seat, so nothing here can move the round
+                // on. Better to leave the table as it is than to loop on a refusal.
+                break;
+            }
+        }
+
+        if (!stood)
+        {
+            return;
+        }
+
+        await SettleIfDoneAsync(table, output);
+        await PushAsync(table, Moved);
+    }
 
     /// <summary>
     /// Refuses a seat while this player's own table still owes them money.

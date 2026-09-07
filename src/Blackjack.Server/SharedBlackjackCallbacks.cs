@@ -104,7 +104,7 @@ public class SharedBlackjackCallbacks(
     {
         log.Detail($"-> state (shared) [{sessionId}]");
 
-        return Respond(await service.StateAsync(sessionId));
+        return Respond(await service.StateAsync(sessionId, Output(sessionId)));
     }
 
     /// <summary>
