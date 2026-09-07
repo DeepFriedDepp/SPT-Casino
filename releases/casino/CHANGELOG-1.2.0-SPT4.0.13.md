@@ -1,6 +1,7 @@
-# SPT Casino 1.1.0, for SPT 4.0.13
+# SPT Casino 1.2.0, for SPT 4.0.13
 
-A build of casino 1.1.0 for the **SPT 4.0.x** line. Same four tables, same slot machine
+A build of the casino for the **SPT 4.0.x** line, with **shared poker tables** -- two people
+at one table, which upstream does not have. Same four tables, same slot machine
 with AUTO and SPEED. It is not the same download as `SPT_CasinoV1.1.0.zip`, which is the
 4.1.x build -- the two differ in target framework, in the version gate, and in which
 folder the server half unpacks into, so they are not interchangeable.
@@ -14,8 +15,8 @@ different machines.
 
 | Download | Contains | Goes on |
 | --- | --- | --- |
-| `SPT_CasinoV1.1.0-SPT4.0.13.zip` | both halves | any machine that **plays** |
-| `SPT_CasinoV1.1.0-SPT4.0.13-server-only.zip` | the server half only | the machine that **hosts** |
+| `SPT_CasinoV1.2.0-SPT4.0.13.zip` | both halves | any machine that **plays** |
+| `SPT_CasinoV1.2.0-SPT4.0.13-server-only.zip` | the server half only | the machine that **hosts** |
 
 **Every player needs the client half on their own machine.** The tab, the lobby and all
 four tables are drawn locally; a player without it sees no casino no matter what the
@@ -49,6 +50,31 @@ this now, and leaving them gives you a tab each on the bar plus several copies o
 same key handler fighting over the escape key. Running `scripts/casino/pack.ps1
 -InstallPath <your SPT>` does this for you, moving them aside rather than deleting them --
 they hold the record of money the house owes anyone whose hand was interrupted.
+
+## Shared poker tables
+
+**You and a friend can sit at the same table.** Open one, they see it in the list, they
+join, and the empty chairs stay filled with bots -- heads-up hold'em is a sharply
+different game from five-handed, and "me and a friend" should not silently change what
+the table is.
+
+Everything single-player is unchanged and PLAY ALONE is still the default.
+
+- Each of you buys in from your own stash and cashes out your own stack. There is no
+  shared pot of real currency: the pot is chips, and chips only become money when
+  somebody stands up.
+- **Nobody can see anybody else's hole cards.** Each player is sent a table built for
+  their own seat, and another seat's cards are not in it at all -- not hidden, absent.
+  That is a different thing, and it is the one that survives a curious player.
+- Moves appear without pressing anything. If a message goes missing there is a REFRESH.
+- Joining waits for the hand to finish, which is both what the code enforces and what
+  poker does anyway.
+- If somebody closes the game mid-hand, the hand carries on and their seat folds. Their
+  chips stay theirs, recorded against their own profile, and come back next time they
+  look in -- exactly like an interrupted solo table.
+
+**Everyone must be on the same server.** That is what Fika gets you; the casino does not
+use Fika for anything else, and could not -- Fika's networking only exists inside a raid.
 
 ## What changed from the 4.1.x build
 
@@ -97,8 +123,13 @@ live record after the request had finished with it, which could throw mid-respon
 
 ## Known limits
 
-- Not yet run inside a live server. Everything here is compile-and-unit-test: 496 tests,
-  0 errors, 0 warnings.
+- Not yet run inside a live server. Everything here is compile-and-unit-test: 555 tests,
+  0 errors, 0 warnings. **The websocket in particular has never carried a real message** --
+  no socket has been opened at all, so the SPT handshake and the push path are the least
+  proven part of this. If shared tables do not update live, that is the first place to
+  look; `scripts/poker/shared-smoke.ps1` exercises everything else without one.
+- Shared tables are **poker only**. Blackjack, Roulette and Slots stay single-player.
+- No spectating, and no rebuying mid-hand.
 - The remaining ordering hazards are unfixed and known: a debit interrupted partway
   leaves money gone with no escrow row, and a crash between the debit and the escrow
   write loses or mints one stake depending on the table. Both need their own design --

@@ -37,7 +37,7 @@ public record ModMetadata : AbstractModMetadata
 
     public override List<string>? Contributors { get; init; }
 
-    public override SemanticVersioning.Version Version { get; init; } = new("1.1.0");
+    public override SemanticVersioning.Version Version { get; init; } = new("1.2.0");
 
     /// <summary>
     /// Targets SPT 4.0.13. "~4.0.13" is >=4.0.13 &lt;4.1.0.
