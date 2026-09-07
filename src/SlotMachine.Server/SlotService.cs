@@ -186,9 +186,18 @@ public class SlotService(
         var stake = (int)request.Stake;
 
         // 2. Recorded before it is taken.
+        //
+        // Same deliberate choice Roulette makes, and the same open window: die between
+        // these two lines and the row claims a stake that was never taken, so the next
+        // contact mints it. Blackjack and Poker debit first and so die the other way,
+        // destroying a stake that really was taken. This table picked never-destroy.
+        // Both windows want a proper design rather than a coin flip; see docs/memory.
         escrow.Record(sessionId, wallet, stake);
 
-        // 3. Taken. A refusal here has touched nothing.
+        // 3. Taken. A refusal here has touched nothing -- now TRUE rather than merely
+        // intended. Until Bank.PutBackWhatLeft a debit could fail having already emptied
+        // some stacks, and the Release below would delete the only record of it. That
+        // needed no crash, just a throw from InventoryHelper.
         if (!bank.TryDebit(sessionId, wallet, stake, output))
         {
             escrow.Release(sessionId);

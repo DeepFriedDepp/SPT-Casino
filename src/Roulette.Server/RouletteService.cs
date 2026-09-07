@@ -318,9 +318,21 @@ public class RouletteService(
         }
 
         // 1. Recorded before it is taken.
+        //
+        // Deliberate, and it is a choice between two bad crash outcomes rather than a
+        // safe one: die between these two lines and the row says the house owes a stake
+        // it never took, so the next contact refunds money nobody paid. The other order
+        // -- Blackjack's and Poker's -- dies the other way and destroys a stake that WAS
+        // taken, with nothing on disk that knows. Minting is exploitable and destroying
+        // is not; losing a player's money silently is the one nobody reports. This table
+        // picked never-destroy. Both windows are still open and both want a design that
+        // closes them properly rather than a coin flip; see docs/memory.
         escrow.Record(sessionId, Currency, stake);
 
-        // 2. Taken. A refusal here has touched nothing.
+        // 2. Taken. A refusal here has touched nothing -- which is now TRUE rather than
+        // merely intended. Until Bank.PutBackWhatLeft, a debit could fail having already
+        // emptied some stacks, and the Release below would then delete the only record
+        // of it. That needed no crash at all, just a throw from InventoryHelper.
         if (!bank.TryDebit(sessionId, Currency, stake, output))
         {
             escrow.Release(sessionId);

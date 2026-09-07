@@ -99,14 +99,47 @@ holder needs to resume. It is properly async now, and no `.Result` / `.Wait()` /
 `Random.Shared` is thread-safe; the `?? new Random()` fallback only fires in tests and the
 console tool. No `lock(_machine)` was added, so no contention was introduced for nothing.
 
+## The partial debit is closed. The crash window is not, and that is a decision.
+
+**Closed:** `TryDebit` walks money stacks with no transaction under it, so a failure
+partway had already taken some of the money -- and every caller treats `false` as
+"nothing moved", returning before writing escrow (Roulette and Slots go further and
+`Release` the row they had written). Money gone, nothing on disk, no route to recovery.
+It needed no crash, just a throw from `InventoryHelper`.
+
+`Bank.PutBackWhatLeft` now reads the balance back -- ground truth, rather than what the
+loop believed it took -- and credits the difference. All four copies. It restores the
+contract callers already assumed, which is why it needed no change at any call site.
+**Not covered by a test**: `Bank` takes concrete `InventoryHelper` and `ProfileHelper`
+whose constructors need a real config server, so the failure cannot be injected without a
+running SPT. Said so in the method, where somebody debugging a live failure will find it.
+
+**Left alone, deliberately:** the crash window between the debit and the escrow write.
+
+The two orderings fail in opposite directions and the code already chose:
+
+| | Order | A crash between them |
+| --- | --- | --- |
+| Blackjack, Poker | debit, then escrow | **destroys** a stake that was taken |
+| Roulette, Slots | escrow, then debit | **mints** a stake that never was |
+
+Roulette's comment says "1. Recorded before it is taken" -- this is a considered choice,
+not an accident, and it picks never-destroy over never-mint. Minting is exploitable;
+destroying is the failure nobody reports because the player cannot see it. Both are
+defensible and reasonable people would disagree.
+
+**So it was not flipped.** Changing money semantics in one direction on somebody else's
+deliberate call, without asking, is not a bug fix. What closes it properly is a
+write-ahead record with a pending/confirmed flag and a startup reconciliation that can
+tell "we may have taken this" from "we definitely did" -- a real design, not a reorder.
+Both call sites now say so where the ordering happens.
+
+One thing the debit fix *did* change here: "a refusal here has touched nothing" was
+aspirational in both files and is now true.
+
 ## Still to do
 
-1. **The ordering fixes.** The partial-debit window and the crash windows (Blackjack and
-   Poker debit before writing escrow; Roulette and Slots record before debiting). Both
-   fixes originally proposed for these were **wrong** -- one was a silent no-op that
-   minted money, the other destroyed the deal stake on double/split. Each needs its own
-   design. See `2026-09-07-money-races-verified.md`.
-2. `StatsStore.Get` should return a copy. Gating closes the same-session half; the
-   cross-session half -- `Save` serialising the whole map while another thread mutates a
-   `PlayerStats` inside it -- is only closed by copying.
-3. **Nothing has been run inside a real SPT server.** Everything here is compile-and-unit-test.
+1. **The crash window**, above -- needs a design decision, and probably the repo owner's.
+2. **Nothing has been run inside a real SPT server.** Everything is compile-and-unit-test:
+   496 tests, 0 errors, 0 warnings. That covers no DI registration, no route dispatch, no
+   `OnLoad` ordering, and none of the new JSON handler path.
