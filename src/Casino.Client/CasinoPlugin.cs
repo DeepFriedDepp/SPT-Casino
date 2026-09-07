@@ -140,11 +140,53 @@ namespace Casino.Client
             // renamed.
             StartCoroutine(CasinoTab.Heartbeat());
 
+            // Opened at load rather than when a table is opened. Asking to be connected
+            // is cheap and the connection is not made here -- Open only says "want to
+            // be", and Update's Pump does the work and the reconnecting. Waiting until a
+            // panel opens would mean the first push after sitting down races the
+            // handshake.
+            Socket = new CasinoSocketClient();
+            Socket.Open();
+
             Log.LogInfo($"[Casino] client loaded -- {Games.All.Count} tables");
         }
 
+        /// <summary>
+        /// Closes the socket when the plugin goes.
+        ///
+        /// Worth doing rather than leaving to the process: the server drops a socket it
+        /// cannot write to, but until it notices, a table pushing to a client that is
+        /// gone waits out the send timeout on every move -- which everybody still at
+        /// that table feels.
+        /// </summary>
+        private void OnDestroy()
+        {
+            Socket?.Close();
+            Socket = null;
+        }
+
+        /// <summary>
+        /// The one socket the casino pushes down, shared by every table.
+        ///
+        /// Owned here rather than by a panel because it has to outlive them: a player
+        /// sitting at a shared table who closes the panel is still at that table, and
+        /// still needs to be told when it moves.
+        /// </summary>
+        internal static CasinoSocketClient Socket { get; private set; }
+
         private void Update()
         {
+            // Drains the socket and decides about reconnecting, both on this thread on
+            // purpose. websocket-sharp raises its own events on a receive thread, and a
+            // panel that draws a card from there dies with "can only be called from the
+            // main thread" inside a library callback whose stack names nothing you
+            // recognise. Pumping here is what makes the handlers safe to write normally.
+            //
+            // Called unconditionally, including while a table is shut: reconnection lives
+            // in Pump, so skipping it when nothing is on screen would mean a player who
+            // closed the panel never gets their connection back.
+            Socket?.Pump();
+
             if (!CasinoEscape.Applied && Input.GetKeyDown(KeyCode.Escape) && CasinoLobby.Anything)
             {
                 CasinoEscape.Back();
