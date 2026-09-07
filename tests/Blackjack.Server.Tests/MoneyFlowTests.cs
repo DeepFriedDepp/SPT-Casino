@@ -22,7 +22,7 @@ public class MoneyFlowTests
     private readonly FakeStats _stats = new();
     private readonly FakeEscrow _escrow = new();
 
-    private BlackjackService Service() => new(_bank, _gate, _profiles, _tables, _stats, _escrow);
+    private BlackjackService Service() => new(_bank, _gate, _profiles, _tables, _stats, _escrow, new SharedBlackjackStore());
 
     /// <summary>Installs a table dealing a known stack, then returns the service.</summary>
     private BlackjackService WithDeal(string cards, Rules? rules = null)

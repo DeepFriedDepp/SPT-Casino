@@ -55,7 +55,7 @@ public class MoneyInvariantTests
         var tables = new TableStore();
 
         return new Harness(
-            new PokerService(bank, new Casino.Server.SessionGate(), profiles, tables, escrow, new FakeNames(), new SilentLog()),
+            new PokerService(bank, new Casino.Server.SessionGate(), profiles, tables, escrow, new FakeNames(), new SilentLog(), new SharedTableStore()),
             bank,
             escrow,
             profiles,

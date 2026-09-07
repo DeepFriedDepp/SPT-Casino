@@ -143,7 +143,7 @@ public class ConcurrencyTests
             new Rules { MinBet = 1, MaxBet = int.MaxValue },
             Shoe.Stacked(cards.Split(' ').Select(Card.Parse))));
 
-        return new BlackjackService(bank, _gate, _profiles, _tables, _stats, _escrow);
+        return new BlackjackService(bank, _gate, _profiles, _tables, _stats, _escrow, new SharedBlackjackStore());
     }
 
     private static DealRequest Bet() => new() { Wager = Wager, Wallet = nameof(Wallet.Roubles) };

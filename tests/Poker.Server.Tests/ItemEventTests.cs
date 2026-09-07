@@ -47,7 +47,7 @@ public class ItemEventTests
 
         var escrow = new FakeEscrow();
         var tables = new TableStore();
-        var service = new PokerService(bank, new Casino.Server.SessionGate(), new FakeProfiles(), tables, escrow, new FakeNames(), new SilentLog());
+        var service = new PokerService(bank, new Casino.Server.SessionGate(), new FakeProfiles(), tables, escrow, new FakeNames(), new SilentLog(), new SharedTableStore());
 
         return new Harness(new PokerItemEventCallbacks(service, new SilentLog()), service, bank, escrow, tables);
     }

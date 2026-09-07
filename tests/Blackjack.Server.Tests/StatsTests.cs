@@ -19,7 +19,7 @@ public class StatsTests
     private BlackjackService WithDeal(string cards)
     {
         _tables.Seed(_session, new BlackjackTable(new Rules(), Shoe.Stacked(cards.Split(' ').Select(Card.Parse))));
-        return new BlackjackService(_bank, _gate, _profiles, _tables, _stats, _escrow);
+        return new BlackjackService(_bank, _gate, _profiles, _tables, _stats, _escrow, new SharedBlackjackStore());
     }
 
     private static DealRequest Bet() => new() { Wager = Wager, Wallet = nameof(Wallet.Roubles) };

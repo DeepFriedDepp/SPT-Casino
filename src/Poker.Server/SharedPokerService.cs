@@ -61,7 +61,8 @@ public class SharedPokerService(
     IEscrowStore escrow,
     INameSource names,
     CasinoSocket socket,
-    IPokerLog log)
+    IPokerLog log,
+    TableStore solo)
 {
     /// <summary>What a player is told when the table has moved without them asking.</summary>
     private const string Moved = "table";
@@ -219,6 +220,12 @@ public class SharedPokerService(
             return refusal;
         }
 
+        if (OwnTableInTheWay(sessionId) is { } busy)
+        {
+            store.Release(sessionId);
+            return busy;
+        }
+
         // Validated before a chip is taken. Letting the table throw after the debit
         // would pocket the buy-in and seat nobody -- the same rule the solo table keeps.
         if (!bank.TryDebit(sessionId, wallet, request.BuyIn, output))
@@ -325,6 +332,11 @@ public class SharedPokerService(
         if (!profiles.HasProfile(sessionId))
         {
             return PokerResponse.Failed("No PMC profile for this session.");
+        }
+
+        if (OwnTableInTheWay(sessionId) is { } busy)
+        {
+            return busy;
         }
 
         // Between hands only. The engine refuses anyway, but saying so here means the
@@ -563,6 +575,39 @@ public class SharedPokerService(
     }
 
     // ---- odds and ends -------------------------------------------------------------
+
+    /// <summary>
+    /// Refuses a seat while this player's own table still holds chips.
+    ///
+    /// **There is one escrow row per session** -- `escrow-poker.json` keeps a single
+    /// <see cref="OutstandingStack"/> per player -- and a shared table gives a session a
+    /// second place to owe from. The two stand-ups settle independently and each releases
+    /// the one row, so whichever happens first takes the other's record with it.
+    ///
+    /// The other half of this rule lives in <see cref="PokerService"/>, which refuses the
+    /// solo table to somebody already sitting at a shared one and, more importantly, stops
+    /// `RefundAbandoned` reading a live shared buy-in as an orphan. Both halves are needed:
+    /// one order is guarded here and the other there.
+    ///
+    /// Null when there is nothing in the way, which is every ordinary player.
+    /// </summary>
+    private PokerResponse? OwnTableInTheWay(MongoId sessionId)
+    {
+        if (escrow.Get(sessionId) is null)
+        {
+            return null;
+        }
+
+        // A live table is the ordinary case and says so. The other case is a stack left
+        // over from a session the server did not live to finish -- real money, so it
+        // cannot be walked past, but "stand up first" would be advice about a table that
+        // no longer exists. Opening the solo panel refunds it, so say that instead.
+        return PokerResponse.Failed(
+            solo.Get(sessionId) is not null
+                ? "You still have chips on your own table. Stand up from it first."
+                : "There is an unclaimed stack on your own table. Open it to collect it "
+                  + "first, then come back.");
+    }
 
     private static SharedTableSummary Summarise(SharedTable table) =>
         new(

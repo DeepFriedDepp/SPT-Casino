@@ -1,4 +1,7 @@
 ﻿using Blackjack.Server;
+using SPTarkov.Server.Core.Models.Logging;
+using SPTarkov.Server.Core.Models.Spt.Logging;
+using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.ItemEvent;
 
@@ -116,6 +119,12 @@ internal sealed class FakeProfiles : IProfileGateway
     /// <summary>Interlocked because `Saves++` from two threads silently loses one.</summary>
     internal int Saves => Volatile.Read(ref _saves);
 
+    /// <summary>A nickname per session, so a test can tell two seats apart by name.</summary>
+    internal Dictionary<string, string> Names { get; } = new();
+
+    public string? NameOf(MongoId sessionId) =>
+        Names.TryGetValue(sessionId.ToString(), out var name) ? name : null;
+
     public bool HasProfile(MongoId sessionId) => Exists;
 
     public Task SaveAsync(MongoId sessionId)
@@ -229,5 +238,61 @@ internal sealed class FakeEscrow : IEscrowStore
         {
             Interlocked.Increment(ref _releases);
         }
+    }
+}
+
+/// <summary>
+/// A logger that says nothing, for the handful of SPT types a test has to construct
+/// for real -- <see cref="Casino.Server.CasinoSocket"/> chiefly, which is a concrete
+/// class rather than an interface because SPT's DI discovers it by the handler
+/// interface it implements.
+/// </summary>
+internal sealed class QuietLogger<T> : ISptLogger<T>
+{
+    public void LogWithColor(
+        string data,
+        LogTextColor? textColor = null,
+        LogBackgroundColor? backgroundColor = null,
+        Exception? ex = null)
+    {
+    }
+
+    public void Success(string data, Exception? ex = null)
+    {
+    }
+
+    public void Error(string data, Exception? ex = null)
+    {
+    }
+
+    public void Warning(string data, Exception? ex = null)
+    {
+    }
+
+    public void Info(string data, Exception? ex = null)
+    {
+    }
+
+    public void Debug(string data, Exception? ex = null)
+    {
+    }
+
+    public void Critical(string data, Exception? ex = null)
+    {
+    }
+
+    public void Log(
+        LogLevel level,
+        string data,
+        LogTextColor? textColor = null,
+        LogBackgroundColor? backgroundColor = null,
+        Exception? ex = null)
+    {
+    }
+
+    public bool IsLogEnabled(LogLevel level) => false;
+
+    public void DumpAndStop()
+    {
     }
 }

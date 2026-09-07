@@ -26,7 +26,8 @@ public class PokerService(
     TableStore tables,
     IEscrowStore escrow,
     INameSource names,
-    IPokerLog log)
+    IPokerLog log,
+    SharedTableStore shared)
 {
     // ---- the gated entrance --------------------------------------------------------
     //
@@ -141,6 +142,16 @@ public class PokerService(
         if (!Enum.TryParse<Wallet>(request.Wallet, ignoreCase: true, out var wallet))
         {
             return PokerResponse.Failed($"Unknown currency '{request.Wallet}'.");
+        }
+
+        // Somebody already sitting at a shared table cannot also open their own. One
+        // escrow row per session is why -- see <see cref="RefundAbandoned"/>. Refused
+        // explicitly rather than left to that method's silence, because a player who
+        // clicked Sit is owed a reason.
+        if (shared.For(sessionId) is not null)
+        {
+            return PokerResponse.Failed(
+                "You are at a shared table. Stand up from it before opening your own.");
         }
 
         // Anything owed from a session that never finished goes back before another
@@ -444,6 +455,20 @@ public class PokerService(
 
         // A live table still owns its stack. Only an orphan is refundable.
         if (tables.Get(sessionId) is not null)
+        {
+            return null;
+        }
+
+        // **And a SHARED table owns its stack just as much.** There is one escrow row per
+        // session, so once a player could sit at somebody else's table this test -- "the
+        // private store has nothing for them, therefore nobody is owed" -- started reading
+        // a live shared buy-in as an orphan and handing the whole thing back. The player
+        // is credited money they never lost, the row goes, and standing up from the shared
+        // table pays the stack out a second time.
+        //
+        // Reachable by opening the solo poker panel while sitting at a shared table, which
+        // also runs this. See `tests/Poker.Server.Tests/SharedTableIsolationTests.cs`.
+        if (shared.For(sessionId) is not null)
         {
             return null;
         }

@@ -20,7 +20,8 @@ public class BlackjackService(
     IProfileGateway profiles,
     TableStore tables,
     IStatsStore stats,
-    IEscrowStore escrow)
+    IEscrowStore escrow,
+    SharedBlackjackStore shared)
 {
     // ---- the gated entrance --------------------------------------------------------
     //
@@ -143,6 +144,11 @@ public class BlackjackService(
         if (!Enum.TryParse<Wallet>(request.Wallet, ignoreCase: true, out var wallet))
         {
             return BlackjackResponse.Failed($"Unknown currency '{request.Wallet}'.");
+        }
+
+        if (AtASharedTable(sessionId) is { } elsewhere)
+        {
+            return elsewhere;
         }
 
         var refund = RefundAbandonedStake(sessionId, output);
@@ -303,6 +309,11 @@ public class BlackjackService(
 
         // A refund moves real items, so this needs the caller's response, not a
         // throwaway -- an abandoned stake is returned through the same path a payout is.
+        if (AtASharedTable(sessionId) is { } elsewhere)
+        {
+            return elsewhere;
+        }
+
         var refund = RefundAbandonedStake(sessionId, output);
 
         var session = tables.For(sessionId);
@@ -317,6 +328,29 @@ public class BlackjackService(
     /// lazily, on next contact, avoids having to touch profiles at boot before the
     /// server has finished loading them.
     /// </summary>
+    /// <summary>
+    /// Refuses the solo table to somebody who is sitting at a shared one.
+    ///
+    /// **This is the guard on the mint, not a tidiness rule.** There is one escrow row per
+    /// session, and <see cref="RefundAbandonedStake"/> -- which runs on every deal and on
+    /// every State, which is to say on opening the panel -- decides a stake is orphaned by
+    /// asking whether the PRIVATE table has a round in progress. A stake sitting in a
+    /// shared table's box fails that test, so without this the player is credited money
+    /// they have not lost, the row is dropped, and the shared round then settles and pays
+    /// them a second time.
+    ///
+    /// The other half lives in <see cref="SharedBlackjackService"/>, which refuses a seat
+    /// while this table owes anything. Both halves are needed: one order is guarded here
+    /// and the other there.
+    ///
+    /// Null when they are not at a shared table, which is every ordinary player.
+    /// </summary>
+    private BlackjackResponse? AtASharedTable(MongoId sessionId) =>
+        shared.For(sessionId) is null
+            ? null
+            : BlackjackResponse.Failed(
+                "You are at a shared table. Leave it before playing on your own.");
+
     private string? RefundAbandonedStake(MongoId sessionId, ItemEventRouterResponse output)
     {
         var owed = escrow.Get(sessionId);

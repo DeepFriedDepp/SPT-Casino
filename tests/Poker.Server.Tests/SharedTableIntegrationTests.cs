@@ -52,7 +52,8 @@ public class SharedTableIntegrationTests
             _escrow,
             new FakeNames(),
             new CasinoSocket(new Silent<CasinoSocket>()),
-            new SilentLog());
+            new SilentLog(),
+            new TableStore());
     }
 
     private static SitRequest Open(int seats = 4) =>

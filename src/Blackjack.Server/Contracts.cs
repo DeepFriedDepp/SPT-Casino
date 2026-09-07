@@ -114,6 +114,30 @@ public record BlackjackResponse
 
     public string Wallet { get; init; } = nameof(Server.Wallet.Roubles);
 
+    /// <summary>
+    /// The whole shared table, when the reply is about one. Null for a private table,
+    /// where <see cref="Round"/> is the view and nothing else is at the felt.
+    ///
+    /// Unfiltered, and that is the game rather than an oversight: every player's cards
+    /// are face up in blackjack and the one concealed card -- the dealer's hole card --
+    /// is hidden from everybody equally by the engine's own view. See
+    /// <see cref="Game.TableView"/>.
+    /// </summary>
+    public Game.TableView? SharedTable { get; init; }
+
+    /// <summary>
+    /// Which box in <see cref="SharedTable"/> belongs to whoever asked.
+    ///
+    /// Sent rather than inferred. Every seat looks alike in the view -- `IsOccupied`
+    /// says a person is there, not which person -- so a client with no seat index has
+    /// no way to tell its own cards from its neighbour's, and would have to guess from
+    /// a name that two players could share.
+    /// </summary>
+    public int? YourSeat { get; init; }
+
+    /// <summary>The tables anybody could sit down at. Only ever set by the list route.</summary>
+    public IReadOnlyList<SharedBlackjackSummary>? Tables { get; init; }
+
     public static BlackjackResponse Failed(string error) => new() { Ok = false, Error = error };
 }
 
@@ -144,3 +168,26 @@ public record BlackjackPlayAction : BaseInteractionRequestData
 /// carries them by virtue of being an item-event reply at all.
 /// </summary>
 public record BlackjackSyncAction : BaseInteractionRequestData;
+
+/// <summary>
+/// Opening a blackjack table other people can sit down at.
+///
+/// The currency is fixed for the table rather than per seat, exactly as poker's is:
+/// the minimum and maximum a box may stake are amounts, and an amount means nothing
+/// until you say what of. A table where one person is in roubles and another in
+/// bitcoin would need an exchange rate to answer "what is the minimum", and there is
+/// no rate a player would agree with.
+/// </summary>
+public record OpenTableRequest : IRequestData
+{
+    /// <summary>Boxes at the table, including the one opening it. Two to seven.</summary>
+    public int Seats { get; set; } = 5;
+
+    public string Wallet { get; set; } = nameof(Server.Wallet.Roubles);
+}
+
+/// <summary>Sitting down at somebody else's table.</summary>
+public record JoinTableRequest : IRequestData
+{
+    public string TableId { get; set; } = string.Empty;
+}

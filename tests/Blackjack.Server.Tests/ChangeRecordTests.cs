@@ -27,7 +27,7 @@ public class ChangeRecordTests
             new Rules { MinBet = 1, MaxBet = int.MaxValue },
             Shoe.Stacked(cards.Split(' ').Select(Card.Parse))));
 
-        return new BlackjackService(_bank, _gate, _profiles, _tables, _stats, _escrow);
+        return new BlackjackService(_bank, _gate, _profiles, _tables, _stats, _escrow, new SharedBlackjackStore());
     }
 
     [Fact]

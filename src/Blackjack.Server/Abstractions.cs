@@ -41,6 +41,20 @@ public interface IProfileGateway
 {
     bool HasProfile(MongoId sessionId);
 
+    /// <summary>
+    /// The player's PMC nickname -- what everybody else at a shared table calls them.
+    ///
+    /// Poker shipped a shared table without this and it went wrong in exactly the way
+    /// the engine's fallback invites: an unnamed person is called "You", which is a
+    /// relationship to whoever is looking rather than a name, so the same word reached
+    /// everybody and one player saw their friend labelled "You". The table stores real
+    /// names and only the panel says "you".
+    ///
+    /// Null when the profile cannot be read; callers fall back rather than refusing a
+    /// seat over a label.
+    /// </summary>
+    string? NameOf(MongoId sessionId);
+
     /// <summary>Flushes money changes to disk. Money that is not saved did not move.</summary>
     Task SaveAsync(MongoId sessionId);
 }

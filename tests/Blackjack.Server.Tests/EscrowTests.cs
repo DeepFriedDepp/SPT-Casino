@@ -20,7 +20,7 @@ public class EscrowTests
     private readonly FakeEscrow _escrow = new();
     private readonly TableStore _tables = new();
 
-    private BlackjackService Service() => new(_bank, _gate, _profiles, _tables, _stats, _escrow);
+    private BlackjackService Service() => new(_bank, _gate, _profiles, _tables, _stats, _escrow, new SharedBlackjackStore());
 
     private BlackjackService WithDeal(string cards)
     {

@@ -67,7 +67,8 @@ public class ConcurrencyTests
             tables,
             escrow,
             new FakeNames(),
-            new SilentLog());
+            new SilentLog(),
+            new SharedTableStore());
 
         var sat = await service.SitAsync(
             new SitRequest { Seats = 4, BuyIn = BuyIn, BigBlind = 20_000, Seed = 1 },
@@ -120,7 +121,8 @@ public class ConcurrencyTests
             tables,
             escrow,
             new FakeNames(),
-            new SilentLog());
+            new SilentLog(),
+            new SharedTableStore());
 
         probe.Arm();
 
