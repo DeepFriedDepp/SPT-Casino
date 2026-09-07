@@ -378,6 +378,116 @@ public sealed class HoldemTable
         }
     }
 
+    /// <summary>
+    /// A person sits down in a chair a bot was keeping warm.
+    ///
+    /// This is what a shared table needs and <see cref="Reseat"/> is not: Reseat buys a
+    /// BROKE seat back in and refuses one that still has chips, because it exists for a
+    /// bust-out. Somebody joining a running table is the opposite case -- the chair is
+    /// occupied and playing fine, and the point is to change WHO is in it.
+    ///
+    /// **Between hands only.** Seating somebody mid-hand would deal them into a pot they
+    /// have not paid into and hand them cards already dealt to somebody else. That is
+    /// also ordinary poker: you wait for the hand to finish.
+    ///
+    /// **The bot's chips are discarded and the person's buy-in takes their place.** Like
+    /// <see cref="Reseat"/>, this makes and destroys chips, and for the same reason the
+    /// engine cannot help it -- the arriving stack is real money out of a real stash and
+    /// has nothing to do with whatever the bot had run its stack up to. Anything counting
+    /// chips across a join has to know. What must NOT change is the real money, and that
+    /// is tracked per player in escrow rather than by this number.
+    /// </summary>
+    public void TakeSeat(int seatIndex, int chips, string name)
+    {
+        RequireBetweenHands("sit down at");
+
+        if (chips <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(chips), chips, "A seat needs chips to play.");
+        }
+
+        var seat = SeatAt(seatIndex);
+
+        if (seat.IsPlayer)
+        {
+            throw new InvalidOperationException(
+                $"Seat {seatIndex} is already somebody's. Two people cannot share a chair.");
+        }
+
+        _seats[seatIndex] = new HoldemSeat(seatIndex, isPlayer: true, name, chips);
+
+        // The agent goes, or it would keep deciding for a chair it no longer sits in --
+        // and the human's action and the bot's would race for the same seat.
+        _agents.Remove(seatIndex);
+
+        _humans.Add(seatIndex);
+        _humans.Sort();
+
+        if (_log.Enabled)
+        {
+            _log.Write($"table: {name} sits down in seat {seatIndex} with {chips}");
+        }
+    }
+
+    /// <summary>
+    /// A person leaves, and a bot takes the chair back.
+    ///
+    /// The seat stays in play rather than emptying, because a five-handed table that
+    /// silently becomes four-handed when somebody stands up changes the game for
+    /// everybody still at it. Their chips leave with them -- the caller has already
+    /// credited that stack back to the person's stash -- and the bot arrives with a
+    /// fresh buy-in, which is the same chip creation <see cref="Reseat"/> documents.
+    ///
+    /// Between hands only, for the same reason as <see cref="TakeSeat"/>.
+    /// </summary>
+    public void VacateSeat(int seatIndex, IPokerAgent replacement, string name, int chips)
+    {
+        RequireBetweenHands("stand up from");
+
+        if (chips <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(chips), chips, "A seat needs chips to play.");
+        }
+
+        var seat = SeatAt(seatIndex);
+
+        if (!seat.IsPlayer)
+        {
+            throw new InvalidOperationException($"Seat {seatIndex} is a bot's already.");
+        }
+
+        if (_humans.Count == 1)
+        {
+            throw new InvalidOperationException(
+                "That is the last person at the table. A table of nothing but bots has nobody to wait for, "
+                + "so the caller closes the table instead of emptying it.");
+        }
+
+        _seats[seatIndex] = new HoldemSeat(seatIndex, isPlayer: false, name, chips);
+        _agents[seatIndex] = replacement;
+        _humans.Remove(seatIndex);
+
+        if (_log.Enabled)
+        {
+            _log.Write($"table: seat {seatIndex} stands up, {name} takes the chair with {chips}");
+        }
+    }
+
+    private void RequireBetweenHands(string what)
+    {
+        if (Street is not (HoldemStreet.Idle or HoldemStreet.Showdown))
+        {
+            throw new InvalidOperationException(
+                $"Nobody can {what} a table in the middle of a hand; it is {Street}.");
+        }
+    }
+
+    private HoldemSeat SeatAt(int seatIndex) =>
+        seatIndex >= 0 && seatIndex < _seats.Count
+            ? _seats[seatIndex]
+            : throw new ArgumentOutOfRangeException(
+                nameof(seatIndex), seatIndex, $"This table has seats 0 to {_seats.Count - 1}.");
+
     /// <summary>What the seat to act may legally do, and for how much.</summary>
     public BettingOptions Options()
     {
