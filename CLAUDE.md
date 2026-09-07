@@ -10,14 +10,14 @@ The server folder holds nine assemblies -- a metadata one plus a `.Server` and a
 assemblies", which was written when there were seven and is true of any number.
 
 **Read the per-mod notes as well as this file.** This one holds only what is true of
-all three; everything specific lives next door and is much longer:
+all four; everything specific lives next door and is much longer:
 
 | Table | Notes | State |
 | --- | --- | --- |
 | Blackjack | `docs/blackjack.md` | Plays for roubles. 1.1.0 is what other people have |
 | Poker | `docs/poker.md` | Plays for roubles. Shipped at 1.0.0 |
-| Roulette | `docs/roulette.md` | Plays for roubles as of 2026-09-05. Never released |
-| Slots | `docs/slots.md` | Roubles, dollars or euros. Played, never released |
+| Roulette | `docs/roulette.md` | Plays for roubles as of 2026-09-05. Ships inside the casino |
+| Slots | `docs/slots.md` | Roubles, dollars or euros. Shipped in casino 1.1.0, with AUTO and SPEED |
 
 `docs/blackjack-readme.md` is Blackjack's public README, kept because it was the
 repo's front page before the merge.
@@ -30,7 +30,7 @@ repo's front page before the merge.
 src/Casino.Client/        the only plugin. Tab, lobby, welcome card, escape key
 src/Casino.Shared/        one copy of what every table draws with. No project of its own
 src/<Table>.Client/       each table's panel and views. NOT shipped as plugins
-src/Casino.Server/        the one IModMetadata, and the legacy-data finder
+src/Casino.Server/        the one AbstractModMetadata, and the legacy-data finder
 src/<Table>.Server/       each table's server code. No metadata of its own any more
 src/<Table>.Game/         the rules, no SPT types, unit tested
 tests/<Table>.*.Tests/
@@ -40,14 +40,14 @@ scripts/<table>/          the per-table server pack and smoke scripts
 docs/<table>.md           that table's working notes
 ```
 
-**`Casino.Client` compiles the three tables in rather than owning them.** The panels
+**`Casino.Client` compiles the four tables in rather than owning them.** The panels
 are listed as `<Compile Include="..\Roulette.Client\...">` in its project file and are
 edited where they live. Not a line of them changed at the merge, which was possible
 only because no panel ever referenced the task bar, the menu icon or the escape key.
 The one thing they did reach for -- a log and a MonoBehaviour to start coroutines on --
 is `src/Casino.Client/Shims.cs`, which stands in under the three old plugin names.
 
-The three `.Client` projects still build on their own and still produce plugins. **Do
+The `.Client` projects still build on their own and still produce plugins. **Do
 not ship those.** They are the editing surface, and `scripts/casino/pack.ps1` retires
 their installed folders when it installs the casino, because four tabs and four Harmony
 patches on one method is the likeliest way an upgrade goes wrong.
@@ -91,44 +91,60 @@ ever two such reaches: where the art is, and where to log. Both are set once at
 startup, and both tolerate never being set -- a shared file that throws because a host
 forgot to introduce itself would be worse than the duplication it replaced.
 
-The three `.Client` projects compile the shared files too, so each still builds on its
-own. `Casino.Client` compiles them once alongside the three panels.
+The `.Client` projects compile the shared files too, so each still builds on its
+own. `Casino.Client` compiles them once alongside the four panels.
 
 Verified against the built assembly rather than assumed: `Casino.Client.dll` now
 carries exactly one `Textures`, one `ProfileSync`, one `CardView` and one `ChipView`.
 Before the extraction it shipped three, three, two and two.
 
 **Still duplicated, on the server side**: `Bank.cs`, `Escrow.cs`, `Abstractions.cs`,
-`ProfileGateway.cs`, `TableStore.cs` and `Wallets.cs` exist three times. Those are
-three separate mods loaded into one server process, so the duplication is real but
+`ProfileGateway.cs`, `TableStore.cs` and `Wallets.cs` exist four times. Those are
+four tables loaded into one server process, so the duplication is real but
 harmless in a way the client's was not. See "Merging the servers".
 
 **Blackjack is the one that drifts**: it is the oldest and improvements made while
 writing the other two were never carried back. On 2026-09-05 that cost a real bug --
-`InRaid` was wrong in all three copies at once, and every casino tab greyed out for
+`InRaid` was wrong in every copy at once, and every casino tab greyed out for
 the rest of the session after a visit to the hideout. That class of fault is what the
 extraction was for.
 
 ## `dotnet` on this box is not the `dotnet` you want
 
-The one first on PATH is `C:\Program Files\dotnet\dotnet.exe` and it carries **only
-the 8.0.423 SDK**, so every .NET 10 project here dies on NETSDK1045 before compiling a
-line. That reads exactly like the repo targeting something impossible. The .NET 10 SDK
-is installed, just user-local:
+**This branch targets SPT 4.0.13, which is net9.0.** There is no .NET 10 SDK on this
+machine and none is needed. The one first on PATH is `C:\Program Files\dotnet\dotnet.exe`
+and carries only 6.0 and 8.0; the SDK you want is user-local:
 
 ```
-C:\Users\Hoel\.dotnet\dotnet.exe --list-sdks   # 9.0.317, 10.0.400
+C:\Users\Jonasty\AppData\Local\Microsoft\dotnet\dotnet.exe --list-sdks   # 9.0.317
 ```
 
-Put that directory ahead of `C:\Program Files\dotnet` on PATH for any `dotnet build`,
-`dotnet test` or `dotnet run`, and for the pack scripts, which shell out to plain
-`dotnet`. The `.Client` projects are net472 and build under either.
+Use that full path for any `dotnet build`, `dotnet test` or `dotnet run` on the server
+half, or put its directory ahead of `C:\Program Files\dotnet` on PATH -- the pack
+scripts shell out to plain `dotnet`. The `.Client` projects are net472 and build under
+the 8.0 SDK that is already on PATH, which is why the client half needs no special
+treatment.
 
 ```
-dotnet build SPT-Casino.slnx      # 18 projects, clean
-dotnet test  SPT-Casino.slnx      # 428 tests
-scripts/casino/pack.ps1 -InstallPath 'H:\SPT4.1.X'
+& 'C:\Users\Jonasty\AppData\Local\Microsoft\dotnet\dotnet.exe' build src\Casino.Server\Casino.Server.csproj -c Release
+dotnet build src\Casino.Client\Casino.Client.csproj -c Release "-p:SPTPath=C:\SPT"
+scripts/casino/pack.ps1 -InstallPath 'C:\SPT'
 ```
+
+`C:\SPT` is the real install here: SPT 4.0.13, EFT `0.16.9.40087`, Fika 2.3.5, read out
+of the binaries rather than a folder name. It is a live, heavily-modded game, not a test
+rig -- treat it as read-only unless installing is the actual task.
+
+**The version gate is loud, not silent.** `CLAUDE.md` said for a long time that a mod
+rejected by `SptVersion` "loads nothing and logs nothing". That is wrong, and it was
+checked against 4.0.13's own `ModValidator`: `ValidateCoreAssemblyReference` runs at
+line 24, *before* the semver check at line 136, and a mod compiled against the wrong
+`SPTarkov.Server.Core` dies there on an **unhandled throw that takes every other server
+mod down with it**. Silence at startup is not the gate. A wall of red is.
+
+**`PluginValidator` does not exist in 4.0.13.** It arrived in 4.1.3. The note elsewhere
+about a plugin built against a 4.0 install being rejected outright describes the 4.1.x
+line only.
 
 `tools/Blackjack.Installer` is deliberately outside the solution: it embeds a
 `payload.zip` that `tools/build-installer.py` generates, so from a clean checkout it
@@ -140,13 +156,14 @@ the build twice; both times the comment was written in this repo's own house sty
 ## The things that are true of every table
 
 **SPT 4.x server mods are C#, not TypeScript.** The `mod.ts` / `package.json` /
-tsyringe world ended at 3.x and most guides online still describe it. Server mods are
-.NET 10 class libraries referencing `SPTarkov.Server.Core`, with an `IModMetadata`
-record in place of `package.json`.
+tsyringe world ended at 3.x and most guides online still describe it. On this branch
+server mods are **net9.0** class libraries referencing `SPTarkov.Server.Core` **4.0.13**,
+with an `AbstractModMetadata` record in place of `package.json`. (On the 4.1.x line
+those are net10.0, `IModMetadata` is an interface, and the NuGet ids are `SPTushonka.*`
+from 4.1.3 -- see `docs/memory/2026-09-07-spt-renamed-to-sptushonka.md`.)
 
-**`SptVersion` is a hard load gate.** All three say `~4.1.3` (>=4.1.3 <4.2.0). A mod
-outside the range loads nothing and *logs nothing*. Silence at startup means the gate,
-not a bug in the game code.
+**`SptVersion` is a hard load gate.** All five places say `~4.0.13` -- `ModMetadata.cs`
+and each `TableInfo.cs`. Move one and you must move all five.
 
 **The plugin is compiled against the game, not just against SPT.** 4.1.3's
 `PluginValidator` reads a plugin's references to `spt-*` and compares Major.Minor to
@@ -182,6 +199,49 @@ it covers, not how many.
 check misses errors that cancel, and a settlement written first gets tests shaped around
 what it already does rather than around what it owes.
 
+### One player, one thing at a time
+
+**Every public service method takes `Casino.Server.SessionGate` and then calls an ungated
+private `*Core`.** Read `src/Casino.Server/SessionGate.cs` before changing anything on a
+service -- the reasoning is all in there. The short version:
+
+- SPT 4.0.13 does **not** serialise requests. Two requests for one profile really do run
+  a mod's handlers at once, and nearly every money defect here is a composite
+  read-then-act with nothing holding the gap.
+- The gate is keyed by **session** and there is exactly **one instance** for the whole
+  casino, not one per table. The resource being protected is the profile: `Bank` mutates
+  the same `pmcData.Inventory.Items` list whichever table you are at, so per-table gates
+  would leave a blackjack deal racing a roulette spin unserialised -- inventory
+  corruption, not a miscount.
+- **It is not reentrant.** That is why the bodies are private `*Core` methods: a gated
+  method calling another gated method for the same session deadlocks until the timeout.
+  If you add an entry point, gate the wrapper and call cores from it.
+- **`Ping` and `Stats` are gated too**, though they move no money. `bank.GetBalance`
+  walks `pmcData.Inventory.Items` while a debit modifies it, and `StatsStore.Get` hands
+  out a live object the serialiser then walks. Neither is a safe read.
+- **Never** use `.Result` / `.Wait()` / `.GetAwaiter().GetResult()` to dodge making a
+  caller async. A blocking wait inside a gated section starves the pool thread the gate
+  holder needs to resume.
+
+**A concurrency test must be proven to fail without the gate.** Disable the
+`gate.EnterAsync` line, watch it fail, quote the message, restore it. Two independent
+reviewers wrote stress tests for this code that passed 7/7 and 20/20 **on the broken
+version** -- `Escrow.Flush` takes a lock and writes a file on every call, which
+serialises the racers by accident. A test that passes either way is worse than none,
+because it will later be read as proof the defect is gone.
+
+Forcing the race needs care too: a `Barrier(2)` deadlocks once the gate is in, because
+the second racer never arrives. See `tests/Poker.Server.Tests/ConcurrencyTests.cs` --
+the probe waits with a **timeout** instead, so the same assertion works gated and
+ungated and neither path hangs.
+
+**Escrow rows are replaced, never edited in place.** `Get` hands out the store's own
+object, so `existing.Amount += amount` both loses updates and mutates a row another
+caller is holding. Poker's was worse -- two separate field writes, and `RefundAbandoned`
+reads `Wallet` to pick the currency, so a torn row could refund roubles as dollars. All
+four stores now publish a fresh `OutstandingStake`/`OutstandingStack` from the
+`AddOrUpdate` delegate.
+
 ## Publishing
 
 **SPT Casino registers as `com.mybutthasarash.sptcasino`, and only the main file has
@@ -194,7 +254,7 @@ was used, on 2026-09-05, to argue that the release could not go out without merg
 the three server mods first. It could. Do not block a release on this again.
 
 ```
-scripts/casino/pack.ps1 -Zip     # releases/casino/SPT_CasinoV1.0.zip
+scripts/casino/pack.ps1 -Zip     # releases/casino/SPT_CasinoV1.1.0.zip
 ```
 
 ## One folder, seven assemblies

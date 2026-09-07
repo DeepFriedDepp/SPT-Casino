@@ -21,3 +21,5 @@ it is worth nothing to the next session.
 | `2026-09-07-spt-renamed-to-sptushonka.md` | SPT's rename, the dead NuGet ids, and two `CLAUDE.md` corrections |
 | `2026-09-07-backport-landed.md` | What the `spt-4.0.13` branch actually changed, and what is still unverified |
 | `2026-09-07-decisions.md` | The three decisions taken, why, and what each rules out |
+| `2026-09-07-money-races-verified.md` | The verified race inventory, and the fix designs that must NOT be built |
+| `2026-09-07-session-gate-landed.md` | The gate, across all four tables, and how each test was proven to fail without it |

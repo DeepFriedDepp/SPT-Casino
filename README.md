@@ -1,6 +1,6 @@
 # SPT Casino
 
-A casino for [SPT](https://sp-tarkov.com) 4.1.x. One tab on the menu bar opens a
+A casino for [SPT](https://sp-tarkov.com) **4.0.13**. One tab on the menu bar opens a
 lobby; the lobby has four tables.
 
 | | |
@@ -20,7 +20,8 @@ The other two are not charity either.
 
 ## Installing
 
-Extract over your SPT folder -- the one holding `SPT_Runtime` -- and start the server.
+Extract over your SPT folder -- the one holding `SPT` and `EscapeFromTarkov.exe` -- and
+start the server.
 
 **If you have Blackjack, Poker or Roulette installed separately, remove them first.**
 They are all part of this now. Leaving them gives you extra tabs on the bar and several
@@ -28,7 +29,8 @@ copies of the same key handler fighting over the escape key.
 
 You should see a `[Casino] client loaded` line in `BepInEx/LogOutput.log` and one
 `[Casino]` line in the server console. Silence there means the version gate rather than
-a bug: the server declares `~4.1.3` and loads nothing outside it.
+a bug: the server declares `~4.0.13`. Note the failure is loud -- a mod built against
+the wrong SPT dies on an unhandled throw and takes the other server mods with it.
 
 Each table can be made talkative on its own, with `VerboseLogging` in its config file
 beside the mod -- `blackjack.config.json`, `poker.config.json`, `roulette.config.json`,
@@ -59,17 +61,17 @@ there:
 
 ## Building
 
-Requires the .NET 10 SDK, and an SPT 4.1.x install for the plugin.
+Requires the .NET 9 SDK, and an SPT 4.0.13 install for the plugin.
 
 ```
-dotnet build SPT-Casino.slnx
+dotnet build SPT-Casino.slnx      # with the .NET 9 SDK first on PATH
 dotnet test  SPT-Casino.slnx
 scripts/casino/pack.ps1 -InstallPath 'C:\path\to\SPT'
 ```
 
 `Casino.Client` is net472 and is compiled against the assemblies of a real install,
 found through `$(SPTPath)` or passed with `-p:SPTPath=<install root>`. Everything else
-is .NET 10 and builds anywhere.
+is net9.0 and builds anywhere.
 
 `pack.ps1` will not write over a running server's assemblies. It says so and installs
 the plugin anyway, so a client-only change does not need the server stopped.

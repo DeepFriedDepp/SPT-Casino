@@ -93,6 +93,32 @@ four `*Log.cs` doc comments pointing at it were already lying -- `Banner` uses a
 **The version gates moved** -- `~4.1.3` -> `~4.0.13` in all five places: `Casino.Server/ModMetadata.cs`
 and each `<Table>.Server/TableInfo.cs`.
 
+## The install path was wrong, and it would have looked like a code bug
+
+`pack.ps1` installed the server half to `SPT_Runtime\user\mods\Casino`. **That is the
+4.1.x layout.** On 4.0.13 it is a folder SPT never reads.
+
+Read off the real install rather than assumed:
+
+```
+C:\SPT\SPT\SPT.Server.exe          <- the server, working directory C:\SPT\SPT
+C:\SPT\SPT\user\mods\              <- 23 mods live here, including fika-server
+C:\SPT\SPT_Runtime\user\mods\      <- one stray folder, nothing reads it
+```
+
+`ModLoader.LoadMods` walks `./user/mods/` relative to the server's working directory, so
+on the 4.0.x line that resolves to `<root>\SPT\user\mods\`. The `.lnk` confirms the
+working directory, and the mtimes confirm which folder is live (Aug 24 vs Aug 1).
+
+This is the nastiest shape of install bug because **nothing errors**. The plugin loads,
+the task-bar tab appears, the lobby opens -- and every route 404s, because the server
+half is sitting somewhere SPT never looked. Hours would go into the client before anyone
+suspected the packer.
+
+`pack.ps1` now has a `$serverRoot` variable, set to `SPT`, used for the stage path, the
+zip layout, the install destination and the retired-mods folder. Moving between lines is
+one string.
+
 ## A real bug the backport surfaced
 
 Five `CS8604` warnings appeared that 4.1.2 never showed: `JsonUtil.Serialize` returns `string?` in

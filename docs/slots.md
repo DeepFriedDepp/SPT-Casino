@@ -605,6 +605,64 @@ its anchor is a test that is not running.**
 
 ## Current state
 
+**2026-09-07 -- this table now runs on SPT 4.0.13.** Everything below predates
+that and describes the 4.1.x line. The `spt-4.0.13` branch retargets the whole
+tree to net9.0 and `SPTarkov.*` 4.0.13, moves the `SptVersion` gate to `~4.0.13`,
+and puts every service entry point behind `Casino.Server.SessionGate` -- one gate
+per player, shared across all four tables, because the thing being protected is
+the profile rather than the table.
+
+Read `docs/memory/` before trusting any version or path in this file.
+`2026-09-07-backport-landed.md` and `2026-09-07-money-races-verified.md` are the
+two that matter.
+
+### The gate on this table, and the two things it cost
+
+**`Ping` was the trap, and it is worth knowing why.** It is not the read it looks
+like: it refunds a stranded stake, so it moves money -- and it reached that refund
+through `RefundStranded(...).GetAwaiter().GetResult()`. Both halves had to go.
+It is gated, because a ping landing inside a pull read that pull's own *live*
+escrow row and handed the stake straight back, so merely opening the panel at the
+wrong moment played the pull for free. And it is properly async, because a
+blocking wait inside a gated section is the one place sync-over-async cannot be
+left alone -- the blocked thread is a pool thread, the continuation it waits for
+needs that same pool, and it is holding the session the whole time. The ripple ran
+out to `SlotCallbacks.Ping` and to `SlotItemEventCallbacks.Sync`, which was
+wrapping the sync call in `Task.FromResult`; both await now. Nothing swapped one
+blocking wait for another.
+
+**`Stats` needed a copy as well as the gate.** `IStatsStore.Get` hands out the
+live record, and the thing that reads it is the JSON serialiser in the HTTP layer
+-- running *after* the gate has been given up, walking `ByCurrency` while a pull
+adds a key to it. Gating the fetch alone would have fixed nothing, so
+`PlayerStats.Snapshot()` takes that walk under the gate and the caller is handed
+something the next pull cannot touch.
+
+**What was deliberately NOT changed: the one shared `Machine`.** It was claimed to
+race on a `System.Random`. It does not. `RandomSource.Create()` is `Random.Shared`,
+which is thread-safe, and `Machine`'s own `?? new Random()` fallback fires only
+when it is constructed with null -- the tests and the console tool, both
+single-threaded. A `lock` there would queue every player in the casino behind one
+another for no gain.
+
+`tests/SlotMachine.Server.Tests/ConcurrencyTests.cs` holds three, each verified to
+**fail with the gate commented out** and pass with it back:
+
+| Test | With the gate taken out |
+| --- | --- |
+| A ping during a pull does not refund the stake in play | closes at 500,000,000 where it owes 499,990,000 -- the stake was minted back |
+| Two concurrent pulls are charged two stakes | closes at 499,990,000 where it owes 499,980,000 -- two pulls, one stake paid for |
+| A stats read during a pull is not a torn read | `PullsPlayed` is 0 with the stake already gone |
+
+One thing not to go looking for: the escrow *overwrite* -- `Escrow.Record` replaces
+rather than accumulates, so a second Record on a live row would discard the first
+stake -- does not show up in those numbers, and cannot. A pull refunds anything
+stranded before it stakes anything, so the second pull clears the first's row a
+moment before its own Record lands. The overwrite is masked by something worse on
+the same path, and the gate closes both.
+
+The server suite is **38 tests** now, up from 35.
+
 **2026-09-07.** Complete, installed, and played over several sittings. Every screen in
 this file has been looked at on a real machine.
 

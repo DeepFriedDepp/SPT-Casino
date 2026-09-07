@@ -1532,6 +1532,17 @@ Blackjack ships as `com.mybutthasarash.blackjack` on the same rule.
 
 ## Current state
 
+**2026-09-07 -- this table now runs on SPT 4.0.13.** Everything below predates
+that and describes the 4.1.x line. The `spt-4.0.13` branch retargets the whole
+tree to net9.0 and `SPTarkov.*` 4.0.13, moves the `SptVersion` gate to `~4.0.13`,
+and puts every service entry point behind `Casino.Server.SessionGate` -- one gate
+per player, shared across all four tables, because the thing being protected is
+the profile rather than the table.
+
+Read `docs/memory/` before trusting any version or path in this file.
+`2026-09-07-backport-landed.md` and `2026-09-07-money-races-verified.md` are the
+two that matter.
+
 **Update this section as work completes.** The last session found this section
 claiming the server did not exist, four commits after it shipped -- a fresh session
 reads this first and would have started building one.

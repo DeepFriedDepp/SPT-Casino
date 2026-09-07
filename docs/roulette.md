@@ -273,6 +273,17 @@ two reds. The test was wrong, not the data, and it now pins that property instea
 
 ## Current state
 
+**2026-09-07 -- this table now runs on SPT 4.0.13.** Everything below predates
+that and describes the 4.1.x line. The `spt-4.0.13` branch retargets the whole
+tree to net9.0 and `SPTarkov.*` 4.0.13, moves the `SptVersion` gate to `~4.0.13`,
+and puts every service entry point behind `Casino.Server.SessionGate` -- one gate
+per player, shared across all four tables, because the thing being protected is
+the profile rather than the table.
+
+Read `docs/memory/` before trusting any version or path in this file.
+`2026-09-07-backport-landed.md` and `2026-09-07-money-races-verified.md` are the
+two that matter.
+
 **Update this section as work completes.**
 
 - **This mod lives in `SPT-Casino` now**, merged with Blackjack and Poker on
@@ -300,6 +311,27 @@ two reds. The test was wrong, not the data, and it now pins that property instea
   mid-spin gives it back on next contact. 13 money tests, written before the
   settlement, and mutation-checked against eight deliberate faults -- all eight
   caught. **Not yet played against a real profile.**
+- **Every route is behind the casino's `SessionGate`**, as of 2026-09-07.
+  `RouletteService`'s seven public methods each take the session's gate and call an
+  ungated private `*Core` -- the split is what stops a gated method calling another
+  one and deadlocking, since the gate is not reentrant. `Place`, `Remove` and `Clear`
+  are inside it too: they move no money, but the cloth is a plain `List<Bet>` they all
+  write and the spin reads, so the exclusion unit is the **table**, not the
+  money-moving call. `Ping`, `Place`, `Remove` and `Clear` became async purely to
+  await the gate, and `RouletteCallbacks` awaits them rather than blocking -- a
+  blocking wait inside a gated section starves the thread the gate holder needs.
+  Two tests in `tests/Roulette.Server.Tests/ConcurrencyTests.cs` pin it, and both were
+  confirmed to fail with the gate commented out:
+  - **A `Place` landing mid-spin was the worst money defect in the repo.** `SpinAsync`
+    read `table.Staked` into a local, debited that, and then called `table.Spin()`,
+    which re-summed the cloth. 900,000 slipped in behind a 100,000 stake settled a
+    1,000,000 cloth against a 100,000 debit and paid 1,800,000 back -- the wallet
+    closed at 21,700,000 where 20,800,000 was owed, deterministically, scaling with
+    whatever the racer put down.
+  - **A `State` landing mid-spin refunded the live spin's stake.** `RefundStranded`
+    checks only `owed.Amount <= 0`, so it cannot tell the row `SpinAsync` writes
+    before it debits from one a crash left behind. Unlike Blackjack and Poker there
+    was no guard on that path at all.
 
 ### Opening the table costs 197ms, and used to cost 1489
 
