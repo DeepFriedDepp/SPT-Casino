@@ -123,11 +123,26 @@ public class EscrowStore : IEscrowStore
                 Chips = chips,
                 SatDownAtUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             },
-            (_, existing) =>
+            // A NEW row rather than an edit of the stored one. This used to be
+            // `existing.Wallet = ...; existing.Chips = ...; return existing;`, which is
+            // two separate writes to an object other callers are holding a reference to
+            // -- `Get` hands out the store's own instance.
+            //
+            // The Chips half loses updates the ordinary way. The Wallet half is worse
+            // and is the reason this is not merely tidying: `RefundAbandoned` reads
+            // `owed.Wallet` and credits THAT currency, so a reader that catches the row
+            // between the two writes can refund a rouble stack as dollars. A torn record
+            // that pays out in the wrong currency is not a rounding error.
+            //
+            // Publishing a fresh instance makes the update atomic from any reader's
+            // point of view, and lets AddOrUpdate's compare-and-swap retry correctly.
+            // `SatDownAtUtc` is deliberately carried over: it records when the player
+            // sat down, not when their stack last changed.
+            (_, existing) => new OutstandingStack
             {
-                existing.Wallet = wallet.ToString();
-                existing.Chips = chips;
-                return existing;
+                Wallet = wallet.ToString(),
+                Chips = chips,
+                SatDownAtUtc = existing.SatDownAtUtc,
             });
 
         Flush();

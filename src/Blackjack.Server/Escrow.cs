@@ -104,6 +104,32 @@ public class EscrowStore : IEscrowStore
     /// <summary>
     /// Adds to whatever is already held. Doubling and splitting raise the stake after
     /// the fact, so this accumulates rather than replaces.
+    ///
+    /// ## The update delegate publishes a NEW row rather than editing the stored one
+    ///
+    /// It used to be `existing.Amount += amount; return existing;`, and that was wrong
+    /// in two ways that compound.
+    ///
+    /// `+=` on a field is a read, an add and a write, not one operation, so two callers
+    /// accumulating at once could both read the same value and the second write would
+    /// erase the first. That direction **loses** money: the row under-records what was
+    /// actually taken, and a refund after a crash then pays back less than the player
+    /// paid. Under-refunding is the failure nobody reports, because the player has no
+    /// way to see what the file said.
+    ///
+    /// Worse, `Get` hands out the store's own object, so a caller that has read the row
+    /// and is about to refund it watches the amount change underneath it. That is the
+    /// property `EscrowSharingTests` pins down, deterministically and without threads --
+    /// stress tests were tried and passed on the broken code, because `Flush` takes a
+    /// lock and writes a file on every call and that serialises the callers by accident.
+    ///
+    /// A pure delegate fixes both. `AddOrUpdate` re-runs it when its compare-and-swap
+    /// loses, so an accumulation that races another is recomputed against the value that
+    /// actually won rather than against a stale one -- and because the stored reference
+    /// is replaced rather than edited, nobody else's row moves under them.
+    ///
+    /// Roulette and Slots already published fresh rows. This is Blackjack catching up,
+    /// which is the drift `CLAUDE.md` warns about, on the money path.
     /// </summary>
     public void Hold(MongoId sessionId, Wallet wallet, int amount)
     {
@@ -121,10 +147,13 @@ public class EscrowStore : IEscrowStore
                 Amount = amount,
                 TakenAtUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             },
-            (_, existing) =>
+            (_, existing) => new OutstandingStake
             {
-                existing.Amount += amount;
-                return existing;
+                // The wallet and the moment of taking belong to the stake that opened
+                // the row; only the amount accumulates.
+                Wallet = existing.Wallet,
+                Amount = existing.Amount + amount,
+                TakenAtUtc = existing.TakenAtUtc,
             });
 
         Flush();

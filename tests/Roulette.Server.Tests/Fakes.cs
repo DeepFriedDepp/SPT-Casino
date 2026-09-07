@@ -14,50 +14,105 @@ namespace Roulette.Server.Tests;
 /// </summary>
 public sealed class FakeBank : IBank
 {
+    /// <summary>
+    /// Every method below is atomic, and that is load-bearing rather than tidy.
+    ///
+    /// The concurrency tests drive two threads through a *service*, and the defects
+    /// they look for are composite -- `escrow.Get` then `bank.Credit` then
+    /// `escrow.Release`, and `table.Staked` read at one line and settled at another,
+    /// with the window sitting *between* the calls. Locking each call individually
+    /// leaves every one of those windows exactly as wide as it is in production, so
+    /// nothing under test is hidden.
+    ///
+    /// What it removes is this fake's own ability to invent failures: without it,
+    /// `_balances` and `Movements` are plain collections written from two threads, and
+    /// a lost `Debits++` would make `Assert.Equal(1, bank.Debits)` **pass on today's
+    /// broken code**. A green test over a real defect is the outcome worth going out of
+    /// the way to avoid.
+    ///
+    /// `Movements` and `Moved` are safe to read once the racing tasks have been awaited.
+    /// </summary>
+    private readonly object _lock = new();
+
     private readonly Dictionary<Wallet, int> _balances = new();
+
+    private int _debits;
+
+    private int _credits;
+
+    private int _refusedDebits;
 
     /// <summary>Every move, in order. What the invariant test measures.</summary>
     public List<(Wallet Wallet, int Amount)> Movements { get; } = [];
 
-    public int Debits { get; private set; }
+    public int Debits => Volatile.Read(ref _debits);
 
-    public int Credits { get; private set; }
+    public int Credits => Volatile.Read(ref _credits);
 
     /// <summary>Set when a debit was refused, so a test can tell a refusal from a bug.</summary>
-    public int RefusedDebits { get; private set; }
+    public int RefusedDebits => Volatile.Read(ref _refusedDebits);
 
     /// <summary>The net of every movement. Zero means the player is exactly where they started.</summary>
-    public int Moved => Movements.Sum(m => m.Amount);
+    public int Moved
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return Movements.Sum(m => m.Amount);
+            }
+        }
+    }
 
-    public void Seed(Wallet wallet, int amount) => _balances[wallet] = amount;
+    public void Seed(Wallet wallet, int amount)
+    {
+        lock (_lock)
+        {
+            _balances[wallet] = amount;
+        }
+    }
 
-    public int GetBalance(MongoId sessionId, Wallet wallet) => _balances.GetValueOrDefault(wallet);
+    public int GetBalance(MongoId sessionId, Wallet wallet)
+    {
+        lock (_lock)
+        {
+            return _balances.GetValueOrDefault(wallet);
+        }
+    }
 
     public bool TryDebit(MongoId sessionId, Wallet wallet, int amount, ItemEventRouterResponse output)
     {
-        if (amount <= 0 || GetBalance(sessionId, wallet) < amount)
+        lock (_lock)
         {
-            RefusedDebits++;
-            return false;
+            var balance = _balances.GetValueOrDefault(wallet);
+
+            if (amount <= 0 || balance < amount)
+            {
+                _refusedDebits++;
+                return false;
+            }
+
+            _balances[wallet] = balance - amount;
+            Movements.Add((wallet, -amount));
+            _debits++;
+
+            return true;
         }
-
-        _balances[wallet] = GetBalance(sessionId, wallet) - amount;
-        Movements.Add((wallet, -amount));
-        Debits++;
-
-        return true;
     }
 
     public void Credit(MongoId sessionId, Wallet wallet, int amount, ItemEventRouterResponse output)
     {
-        if (amount <= 0)
+        lock (_lock)
         {
-            return;
-        }
+            if (amount <= 0)
+            {
+                return;
+            }
 
-        _balances[wallet] = GetBalance(sessionId, wallet) + amount;
-        Movements.Add((wallet, amount));
-        Credits++;
+            _balances[wallet] = _balances.GetValueOrDefault(wallet) + amount;
+            Movements.Add((wallet, amount));
+            _credits++;
+        }
     }
 
     /// <summary>Roubles stack to a million on a stock server; dollars and euros to 50,000.</summary>
@@ -70,15 +125,18 @@ public sealed class FakeBank : IBank
 
 public sealed class FakeProfiles : IProfileGateway
 {
+    private int _saves;
+
     public bool Exists { get; set; } = true;
 
-    public int Saves { get; private set; }
+    /// <summary>Interlocked because `Saves++` from two threads silently loses one.</summary>
+    public int Saves => Volatile.Read(ref _saves);
 
     public bool HasProfile(MongoId sessionId) => Exists;
 
     public Task SaveAsync(MongoId sessionId)
     {
-        Saves++;
+        Interlocked.Increment(ref _saves);
         return Task.CompletedTask;
     }
 }
@@ -92,32 +150,57 @@ public sealed class FakeProfiles : IProfileGateway
 /// </summary>
 public sealed class FakeEscrow : IEscrowStore
 {
+    private readonly object _lock = new();
+
     private readonly Dictionary<string, OutstandingStake> _held = new();
+
+    private int _releases;
 
     /// <summary>Every value ever recorded, so a test can see when it was written.</summary>
     public List<int> Recorded { get; } = [];
 
-    public int Releases { get; private set; }
+    /// <summary>
+    /// Releases that actually removed a row. A second concurrent release finds nothing
+    /// and does not count -- which is how a test tells "both racers refunded" from
+    /// "both racers tried".
+    /// </summary>
+    public int Releases => Volatile.Read(ref _releases);
 
-    public OutstandingStake? Get(MongoId sessionId) => _held.GetValueOrDefault(sessionId.ToString());
+    public OutstandingStake? Get(MongoId sessionId)
+    {
+        lock (_lock)
+        {
+            return _held.GetValueOrDefault(sessionId.ToString());
+        }
+    }
 
     public void Record(MongoId sessionId, Wallet wallet, int amount)
     {
-        _held[sessionId.ToString()] = new OutstandingStake
+        lock (_lock)
         {
-            Wallet = wallet.ToString(),
-            Amount = amount,
-            TakenAtUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-        };
+            _held[sessionId.ToString()] = new OutstandingStake
+            {
+                Wallet = wallet.ToString(),
+                Amount = amount,
+                TakenAtUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            };
 
-        Recorded.Add(amount);
+            Recorded.Add(amount);
+        }
     }
 
     public void Release(MongoId sessionId)
     {
-        if (_held.Remove(sessionId.ToString()))
+        bool removed;
+
+        lock (_lock)
         {
-            Releases++;
+            removed = _held.Remove(sessionId.ToString());
+        }
+
+        if (removed)
+        {
+            Interlocked.Increment(ref _releases);
         }
     }
 
@@ -127,12 +210,15 @@ public sealed class FakeEscrow : IEscrowStore
     /// </summary>
     public void Strand(MongoId sessionId, Wallet wallet, int amount)
     {
-        _held[sessionId.ToString()] = new OutstandingStake
+        lock (_lock)
         {
-            Wallet = wallet.ToString(),
-            Amount = amount,
-            TakenAtUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-        };
+            _held[sessionId.ToString()] = new OutstandingStake
+            {
+                Wallet = wallet.ToString(),
+                Amount = amount,
+                TakenAtUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            };
+        }
     }
 }
 
