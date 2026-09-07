@@ -15,13 +15,17 @@ namespace Casino.Server;
 /// switch is on -- see any of them. Turn one on and its block comes back, underneath
 /// this.
 ///
-/// Ordered ahead of them on purpose: `PostLoad` against their `PostLoad + 1`, so the
-/// headline is above the detail rather than buried in the middle of it.
+/// Ordered ahead of them on purpose: `PostSptModLoader` against their
+/// `PostSptModLoader + 1`, so the headline is above the detail rather than buried in
+/// the middle of it. (It was `PostLoad` and `PostLoad + 1` on 4.1.x. That constant does
+/// not exist in 4.0.13, whose `OnLoadOrder` is renamed and renumbered throughout -- of
+/// the eight names the two versions share, only `Watermark` still means the same
+/// number. Only the relative order matters here, and it is preserved.)
 /// </summary>
-[Injectable(TypePriority = OnLoadOrder.PostLoad)]
+[Injectable(TypePriority = OnLoadOrder.PostSptModLoader)]
 public class Startup : IOnLoad
 {
-    public Task OnLoadAsync(CancellationToken cancellationToken)
+    public Task OnLoad()
     {
         var metadata = new ModMetadata();
 

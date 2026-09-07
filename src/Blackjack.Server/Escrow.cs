@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Reflection;
-using SPTarkov.Common.Models.Logging;
+using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.Helpers.Server;
+using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Utils;
 
@@ -144,7 +144,17 @@ public class EscrowStore : IEscrowStore
         {
             try
             {
-                _fileUtil.WriteFile(_path, _jsonUtil.Serialize(_held, true));
+                var json = _jsonUtil.Serialize(_held, true);
+
+                if (json is null)
+                {
+                    // Writing nothing would truncate the file and lose every stake it
+                    // was holding, which is worse than failing to write at all.
+                    _logger.Error($"Blackjack: the outstanding stakes would not serialise -- {_path} left as it was.");
+                    return;
+                }
+
+                _fileUtil.WriteFile(_path, json);
             }
             catch (Exception ex)
             {

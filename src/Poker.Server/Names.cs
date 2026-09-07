@@ -1,5 +1,5 @@
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.Models.Spt.Tables;
+using SPTarkov.Server.Core.Services;
 
 namespace Poker.Server;
 
@@ -16,7 +16,7 @@ namespace Poker.Server;
 /// worse than a numbered seat.
 /// </summary>
 [Injectable]
-public class BotNames(BotTable bots) : INameSource
+public class BotNames(DatabaseService database) : INameSource
 {
     /// <summary>
     /// Read once. The list does not change while the server is up, and filtering six
@@ -68,7 +68,7 @@ public class BotNames(BotTable bots) : INameSource
         // Types is nullable on the model, and a mod is in no position to promise the
         // bot database was loaded. Falling through to an empty pool costs the names
         // and nothing else.
-        var types = bots.Types;
+        var types = database.GetBots()?.Types;
 
         foreach (var type in new[] { "usec", "bear" })
         {

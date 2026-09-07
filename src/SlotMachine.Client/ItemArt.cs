@@ -307,12 +307,22 @@ namespace SlotMachine.Client
 
             try
             {
-                if (!Singleton<ItemFactory>.Instantiated || !Singleton<ItemIconCreator>.Instantiated)
+                // The two obfuscated names on this line are the whole of what the
+                // 4.0.13 client build cost. 4.1's client is deobfuscated and calls
+                // these ItemFactory and ItemIconCreator; on 0.16.9.40087 they are
+                // ItemFactoryClass and GClass926. Nothing else in the plugin moved --
+                // of the 19 Assembly-CSharp types it touches, 17 kept their names.
+                //
+                // GClass926 is not a guess. The game's own
+                // ItemViewFactory.GetItemSpriteAsync resolves the icon renderer as
+                // Singleton<GClass926>, so this guard checks precisely the object the
+                // render path below goes on to use.
+                if (!Singleton<ItemFactoryClass>.Instantiated || !Singleton<GClass926>.Instantiated)
                 {
                     return false;
                 }
 
-                var item = Singleton<ItemFactory>.Instance.CreateItem(MongoID.Generate(true), template, null);
+                var item = Singleton<ItemFactoryClass>.Instance.CreateItem(MongoID.Generate(true), template, null);
 
                 if (item == null)
                 {

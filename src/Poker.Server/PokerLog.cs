@@ -1,7 +1,7 @@
 using System.Reflection;
-using SPTarkov.Common.Models.Logging;
+using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.Helpers.Server;
+using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Utils;
 
 namespace Poker.Server;
@@ -80,17 +80,17 @@ public class PokerLog : IPokerLog
     /// somebody could be surprised by later.
     /// </summary>
     public void Notice(string message) =>
-        _logger.LogWithColor($"{Prefix} {message}", Spectre.Console.Color.Orange1);
+        _logger.LogWithColor($"{Prefix} {message}", SPTarkov.Server.Core.Models.Logging.LogTextColor.Yellow);
 
     /// <summary>
-    /// A startup line, in the next colour along.
+    /// A startup line, in the casino's banner colour.
     ///
-    /// The cycle is shared across all three tables -- see
-    /// <see cref="Casino.Server.Palette"/> -- so the block reads as one run of colour
-    /// rather than three that each start over.
+    /// One flat colour for every banner line and every table, on purpose: they print
+    /// one block after another and they are one mod, so a single colour reads as one
+    /// run rather than as four that each start over.
     /// </summary>
     public void Banner(string message) =>
-        _logger.LogWithColor($"{Prefix} {message}", Casino.Server.Palette.Next());
+        _logger.LogWithColor($"{Prefix} {message}", SPTarkov.Server.Core.Models.Logging.LogTextColor.Cyan);
 
     public void Info(string message) => _logger.Info($"{Prefix} {message}");
 

@@ -7,14 +7,22 @@ namespace Roulette.Server;
 /// Announces the mod on the server console at boot.
 ///
 /// The most important thing here is not any single line -- it is that the block
-/// appears at all. A mod rejected by the SptVersion gate loads nothing and logs
-/// nothing, so silence at startup means the gate rather than a bug in the game code.
+/// appears at all. But note it is NOT the version gate that silence would point
+/// to: on 4.0.13 a mod rejected for its version dies on an unhandled throw and
+/// takes every other server mod with it. That failure is a wall of red, not a
+/// quiet absence. See Casino.Server.ModMetadata. Silence here means the verbose
+/// switch below, or a table that never loaded at all.
 /// </summary>
-[Injectable(TypePriority = OnLoadOrder.PostLoad + 1)]
+[Injectable(TypePriority = OnLoadOrder.PostSptModLoader + 1)]
 public class Startup(RouletteLog log) : IOnLoad
 {
-    public Task OnLoadAsync(CancellationToken cancellationToken)
+    public Task OnLoad()
     {
+        // FIRST, and ahead of the verbose gate below on purpose: without this every
+        // one of this table's item events throws inside SPT's JSON layer, before the
+        // router is reached. A table whose banner is switched off still has to bind
+        // its own bodies. See Casino.Server.ItemEventActions.
+        RouletteActions.Register();
 
         // Silent unless asked. Casino.Server.Startup prints the one line the casino
         // needs at boot; everything below is a mod author's view of one table, and

@@ -1,6 +1,8 @@
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.Models.Eft.Common;
+using SPTarkov.Server.Core.Models.Eft.Common.Request;
 using SPTarkov.Server.Core.DI;
-using SPTarkov.Server.Core.DI.Routing;
+using SPTarkov.Server.Core.Routers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.ItemEvent;
 
@@ -14,6 +16,16 @@ public static class SlotActions
     /// when it needs the profile changes SPT has been holding for it.
     /// </summary>
     public const string Sync = "SlotsSync";
+
+    /// <summary>
+    /// Teaches SPT's one global body converter how to build this. It carries nothing,
+    /// and it still has to be registered: on 4.0.13 the converter rejects an
+    /// unrecognised action *name* while the request is being deserialized, before the
+    /// router is ever reached. <see cref="Casino.Server.ItemEventActions"/> has the
+    /// whole story. Called from <see cref="Startup"/>.
+    /// </summary>
+    public static void Register() =>
+        Casino.Server.ItemEventActions.Register<SlotSyncAction>(Sync);
 }
 
 /// <summary>
@@ -31,14 +43,21 @@ public static class SlotActions
 /// win before the reels stopped. Roulette learned that with its wheel; the fix is for
 /// the client to decide when to ask, which is what this is.
 /// </summary>
-[Injectable(TypePriority = OnLoadOrder.Routers)]
+[Injectable(TypePriority = OnLoadOrder.PostDBModLoader)]
 public sealed class SlotItemEventRouter(SlotItemEventCallbacks callbacks)
-    : ItemEventRouter([
-        new ItemRouteAction<SlotSyncAction>(
-            SlotActions.Sync,
-            async (url, pmcData, body, sessionId, output, cancellationToken) =>
-                await callbacks.Sync(sessionId, output)),
-    ]);
+    : ItemEventRouterDefinition
+{
+    protected override IEnumerable<HandledRoute> GetHandledRoutes() =>
+        [new HandledRoute(SlotActions.Sync, false)];
+
+    protected override async ValueTask<ItemEventRouterResponse> HandleItemEventInternal(
+        string url,
+        PmcData pmcData,
+        BaseInteractionRequestData body,
+        MongoId sessionID,
+        ItemEventRouterResponse output) =>
+        await callbacks.Sync(sessionID, output);
+}
 
 /// <summary>
 /// Answers the sync action.

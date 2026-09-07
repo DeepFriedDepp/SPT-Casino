@@ -1,6 +1,10 @@
 using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.Models.Eft.Common;
+using SPTarkov.Server.Core.Models.Eft.Common.Request;
+using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Models.Eft.ItemEvent;
 using SPTarkov.Server.Core.DI;
-using SPTarkov.Server.Core.DI.Routing;
+using SPTarkov.Server.Core.Routers;
 
 namespace Poker.Server;
 
@@ -21,6 +25,22 @@ public static class PokerActions
     /// <see cref="PokerItemEventCallbacks.Sync"/>.
     /// </summary>
     public const string Sync = "PokerSync";
+
+    /// <summary>
+    /// Teaches SPT's one global body converter how to build these five. Without it
+    /// every one of them throws while the request is still being deserialized, before
+    /// the router is reached -- <see cref="Casino.Server.ItemEventActions"/> has the
+    /// whole story. Called from <see cref="Startup"/>, and the payload-less ones are
+    /// registered too: the converter rejects the *name*, not the shape.
+    /// </summary>
+    public static void Register()
+    {
+        Casino.Server.ItemEventActions.Register<PokerSitAction>(Sit);
+        Casino.Server.ItemEventActions.Register<PokerDealAction>(Deal);
+        Casino.Server.ItemEventActions.Register<PokerActAction>(Act);
+        Casino.Server.ItemEventActions.Register<PokerLeaveAction>(Leave);
+        Casino.Server.ItemEventActions.Register<PokerSyncAction>(Sync);
+    }
 }
 
 /// <summary>
@@ -36,34 +56,41 @@ public static class PokerActions
 /// the mod is exercised with a script and no game attached, and they discard the
 /// change record because nothing is listening for it.
 /// </summary>
-[Injectable(TypePriority = OnLoadOrder.Routers)]
+[Injectable(TypePriority = OnLoadOrder.PostDBModLoader)]
 public sealed class PokerItemEventRouter(PokerItemEventCallbacks callbacks)
-    : ItemEventRouter([
-        new ItemRouteAction<PokerSitAction>(
-            PokerActions.Sit,
-            async (url, pmcData, body, sessionId, output, cancellationToken) =>
-                await callbacks.Sit(body, sessionId, output)),
-
-        new ItemRouteAction<PokerDealAction>(
-            PokerActions.Deal,
-            async (url, pmcData, body, sessionId, output, cancellationToken) =>
-                await callbacks.Deal(body, sessionId, output)),
-
-        new ItemRouteAction<PokerActAction>(
-            PokerActions.Act,
-            async (url, pmcData, body, sessionId, output, cancellationToken) =>
-                await callbacks.Act(body, sessionId, output)),
-
-        new ItemRouteAction<PokerLeaveAction>(
-            PokerActions.Leave,
-            async (url, pmcData, body, sessionId, output, cancellationToken) =>
-                await callbacks.Leave(body, sessionId, output)),
-
-        new ItemRouteAction<PokerSyncAction>(
-            PokerActions.Sync,
-            (url, pmcData, body, sessionId, output, cancellationToken) =>
-                new ValueTask<SPTarkov.Server.Core.Models.Eft.ItemEvent.ItemEventRouterResponse>(
-                    callbacks.Sync(sessionId, output))),
-    ])
+    : ItemEventRouterDefinition
 {
+    /// <summary>
+    /// 4.0.13 has no <c>ItemRouteAction&lt;T&gt;</c> to declare a payload type on, so
+    /// the router dispatches on the action name itself. The body is already the right
+    /// record by the time it arrives -- <see cref="PokerActions.Register"/> told SPT's
+    /// converter how to build it -- so this is a cast, not a re-parse.
+    /// </summary>
+    private static T Typed<T>(BaseInteractionRequestData body)
+        where T : BaseInteractionRequestData =>
+        Casino.Server.ItemEventActions.Typed<T>(body);
+
+    protected override IEnumerable<HandledRoute> GetHandledRoutes() =>
+    [
+        new HandledRoute(PokerActions.Sit, false),
+        new HandledRoute(PokerActions.Deal, false),
+        new HandledRoute(PokerActions.Act, false),
+        new HandledRoute(PokerActions.Leave, false),
+        new HandledRoute(PokerActions.Sync, false),
+    ];
+
+    protected override async ValueTask<ItemEventRouterResponse> HandleItemEventInternal(
+        string url,
+        PmcData pmcData,
+        BaseInteractionRequestData body,
+        MongoId sessionID,
+        ItemEventRouterResponse output) =>
+        body.Action switch
+        {
+            PokerActions.Sit => await callbacks.Sit(Typed<PokerSitAction>(body), sessionID, output),
+            PokerActions.Deal => await callbacks.Deal(Typed<PokerDealAction>(body), sessionID, output),
+            PokerActions.Act => await callbacks.Act(Typed<PokerActAction>(body), sessionID, output),
+            PokerActions.Leave => await callbacks.Leave(Typed<PokerLeaveAction>(body), sessionID, output),
+            _ => await callbacks.Sync(sessionID, output),
+        };
 }

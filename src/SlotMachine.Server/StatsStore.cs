@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Reflection;
-using SPTarkov.Common.Models.Logging;
+using SPTarkov.Server.Core.Models.Utils;
 using SPTarkov.DI.Annotations;
-using SPTarkov.Server.Core.Helpers.Server;
+using SPTarkov.Server.Core.Helpers;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Utils;
 
@@ -53,7 +53,10 @@ public class StatsStore : IStatsStore
 
         try
         {
-            _fileUtil.WriteFile(_path, _jsonUtil.Serialize(_stats, true));
+            var probe = _jsonUtil.Serialize(_stats, true)
+                        ?? throw new InvalidOperationException("the stats would not serialise");
+
+            _fileUtil.WriteFile(_path, probe);
             Writable = true;
         }
         catch (Exception ex)
@@ -86,7 +89,17 @@ public class StatsStore : IStatsStore
         {
             try
             {
-                _fileUtil.WriteFile(_path, _jsonUtil.Serialize(_stats, true));
+                var json = _jsonUtil.Serialize(_stats, true);
+
+                if (json is null)
+                {
+                    // Writing nothing would truncate the file and lose every record it
+                    // holds, which is worse than failing to add to it.
+                    _logger.Error($"Slots: the stats would not serialise -- {_path} left as it was.");
+                    return;
+                }
+
+                _fileUtil.WriteFile(_path, json);
             }
             catch (Exception ex)
             {

@@ -11,11 +11,17 @@ namespace SlotMachine.Server;
 /// the casino needs at boot, and four tables each printing a block was about
 /// twenty-five lines of somebody's console for a game they had not opened.
 /// </summary>
-[Injectable(TypePriority = OnLoadOrder.PostLoad + 1)]
+[Injectable(TypePriority = OnLoadOrder.PostSptModLoader + 1)]
 public class Startup(SlotLog log) : IOnLoad
 {
-    public Task OnLoadAsync(CancellationToken cancellationToken)
+    public Task OnLoad()
     {
+        // FIRST, and ahead of the verbose gate below on purpose: without this every
+        // one of this table's item events throws inside SPT's JSON layer, before the
+        // router is reached. A table whose banner is switched off still has to bind
+        // its own bodies. See Casino.Server.ItemEventActions.
+        SlotActions.Register();
+
         if (!log.Verbose)
         {
             return Task.CompletedTask;
