@@ -25,3 +25,4 @@ it is worth nothing to the next session.
 | `2026-09-07-session-gate-landed.md` | The gate, across all four tables, and how each test was proven to fail without it |
 | `2026-09-07-shared-table-design.md` | Two humans at one poker table: lock order, per-seat privacy, and what happens when somebody alt-F4s |
 | `2026-09-07-shared-blackjack-design.md` | Shared blackjack, and the three places copying poker would be wrong |
+| `2026-09-07-first-live-run.md` | It ran. What one real two-player match proves, and what it does not |

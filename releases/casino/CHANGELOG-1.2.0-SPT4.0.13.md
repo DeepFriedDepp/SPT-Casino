@@ -123,11 +123,15 @@ live record after the request had finished with it, which could throw mid-respon
 
 ## Known limits
 
-- Not yet run inside a live server. Everything here is compile-and-unit-test: 555 tests,
-  0 errors, 0 warnings. **The websocket in particular has never carried a real message** --
-  no socket has been opened at all, so the SPT handshake and the push path are the least
-  proven part of this. If shared tables do not update live, that is the first place to
-  look; `scripts/poker/shared-smoke.ps1` exercises everything else without one.
+- Played, and it works: a full two-player poker match on a real 4.0.13 server. That covers
+  the mod loading, the routes, the item events, the websocket and two people sharing one
+  table. 555 tests, 0 errors, 0 warnings alongside it.
+- Not yet exercised: somebody disconnecting mid-hand, two requests landing in the same
+  instant, and running out of money mid-round. Those paths are tested but have not
+  happened for real.
+- Hole-card privacy is asserted by tests and by `scripts/poker/shared-smoke.ps1`, not by
+  having played -- two people each see their own screen and would not notice either way.
+  Run the smoke script if you want it confirmed by observation.
 - Shared tables are **poker only**. Blackjack, Roulette and Slots stay single-player.
 - No spectating, and no rebuying mid-hand.
 - The remaining ordering hazards are unfixed and known: a debit interrupted partway

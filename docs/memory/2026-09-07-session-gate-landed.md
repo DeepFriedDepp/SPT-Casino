@@ -140,6 +140,7 @@ aspirational in both files and is now true.
 ## Still to do
 
 1. **The crash window**, above -- needs a design decision, and probably the repo owner's.
-2. **Nothing has been run inside a real SPT server.** Everything is compile-and-unit-test:
-   496 tests, 0 errors, 0 warnings. That covers no DI registration, no route dispatch, no
-   `OnLoad` ordering, and none of the new JSON handler path.
+2. ~~Nothing has been run inside a real SPT server.~~ **It has** -- a full two-player poker
+   match, 2026-09-07, which exercised DI registration, route dispatch, `OnLoad` ordering
+   and the new JSON handler path. See `2026-09-07-first-live-run.md`; the gate itself was
+   still not put under real concurrency.

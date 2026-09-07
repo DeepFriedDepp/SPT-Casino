@@ -37,8 +37,11 @@ Build with the user-local SDK -- there is no .NET 10 on this box and none is nee
 dotnet build src\Casino.Client\Casino.Client.csproj -c Release "-p:SPTPath=C:\SPT"   # net472, the 8.0 SDK is fine
 ```
 
-**Not yet run inside a server.** Everything below compiles and unit-tests; nothing has been loaded into
-SPT. DI registration, route dispatch, `OnLoad` ordering and the JSON handler path are all unexercised.
+**It has now run.** A full two-player poker match on a real 4.0.13 server, 2026-09-07 -- see
+`2026-09-07-first-live-run.md` for what that proves and what it does not. Everything below was
+written before that and is left as it was -- including the sentence this replaced, which said
+nothing had been loaded into SPT and that DI registration, route dispatch, `OnLoad` ordering and
+the JSON handler path were all unexercised. A finished hand needed every one of them.
 
 ## What changed, by kind
 
@@ -140,7 +143,9 @@ on the money path. All five sites now match the newer tables' pattern.
 ## Left to do
 
 1. **The money races** -- being specified now. See `2026-09-07-money-concurrency-defects.md`.
-2. Load it into the real server and watch it boot. Nothing here is runtime-verified.
+2. ~~Load it into the real server and watch it boot.~~ Done -- it boots and plays. The
+   narrower gaps (disconnects, forced concurrency, `PutBackWhatLeft`) are in
+   `2026-09-07-first-live-run.md`.
 3. No test covers the rewritten item-event transport. No test constructs any `*ItemEventRouter` or
    exercises `HandleItemEventInternal`; `Poker.Server.Tests/ItemEventTests.cs` drives the *callbacks* with
    already-typed objects, which bypasses precisely the layer that was rewritten.
