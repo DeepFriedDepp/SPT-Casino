@@ -37,13 +37,31 @@ internal sealed class FakeBank : IBank
     /// </summary>
     private readonly object _lock = new();
 
-    private readonly Dictionary<Wallet, int> _balances =
+    /// <summary>
+    /// What a session starts with. <see cref="SetBalance"/> writes here.
+    ///
+    /// A default rather than a seeded table because almost every test uses one session
+    /// and never names it -- asking each of them to seed a wallet first would be a lot of
+    /// ceremony for nothing.
+    /// </summary>
+    private readonly Dictionary<Wallet, int> _opening =
         Enum.GetValues<Wallet>().ToDictionary(w => w, w => w switch
         {
             Wallet.Roubles => 1_000_000,
             Wallet.Dollars or Wallet.Euros => 10_000,
             _ => 0,
         });
+
+    /// <summary>
+    /// **A wallet per session, not one for the table.**
+    ///
+    /// It was one until shared tables arrived, and that made the money assertions in a
+    /// two-player test meaningless: Alice betting 50,000 moved the same number Bob's
+    /// balance was read off, so "each player is paid their own result" passed whether or
+    /// not the settlement crossed them. The first shared-table test caught it by
+    /// expecting 950,000 and being handed 900,000 -- both players' stakes off one purse.
+    /// </summary>
+    private readonly Dictionary<(string Session, Wallet Wallet), int> _balances = [];
 
     /// <summary>No stack limit in the fakes -- splitting is the real Bank's problem.</summary>
     public int MaxStackSize(Wallet wallet) => int.MaxValue;
@@ -62,11 +80,22 @@ internal sealed class FakeBank : IBank
     /// <summary>Forces TryDebit to fail, simulating money vanishing mid-round.</summary>
     internal bool RefuseDebits { get; set; }
 
+    /// <summary>
+    /// Sets what every session holds in this wallet, including ones already touched.
+    ///
+    /// Applies to everybody rather than to one player, so a test that seeds a stash before
+    /// two people sit down does not have to name them both.
+    /// </summary>
     internal void SetBalance(Wallet wallet, int amount)
     {
         lock (_lock)
         {
-            _balances[wallet] = amount;
+            _opening[wallet] = amount;
+
+            foreach (var key in _balances.Keys.Where(key => key.Wallet == wallet).ToList())
+            {
+                _balances[key] = amount;
+            }
         }
     }
 
@@ -74,7 +103,7 @@ internal sealed class FakeBank : IBank
     {
         lock (_lock)
         {
-            return _balances[wallet];
+            return Held(sessionId, wallet);
         }
     }
 
@@ -82,12 +111,12 @@ internal sealed class FakeBank : IBank
     {
         lock (_lock)
         {
-            if (RefuseDebits || amount <= 0 || _balances[wallet] < amount)
+            if (RefuseDebits || amount <= 0 || Held(sessionId, wallet) < amount)
             {
                 return false;
             }
 
-            _balances[wallet] -= amount;
+            _balances[(sessionId.ToString(), wallet)] = Held(sessionId, wallet) - amount;
             Debits.Add((wallet, amount));
             Outputs.Add(output);
             return true;
@@ -103,11 +132,15 @@ internal sealed class FakeBank : IBank
                 return;
             }
 
-            _balances[wallet] += amount;
+            _balances[(sessionId.ToString(), wallet)] = Held(sessionId, wallet) + amount;
             Credits.Add((wallet, amount));
             Outputs.Add(output);
         }
     }
+
+    /// <summary>Caller holds <see cref="_lock"/>.</summary>
+    private int Held(MongoId sessionId, Wallet wallet) =>
+        _balances.TryGetValue((sessionId.ToString(), wallet), out var held) ? held : _opening[wallet];
 }
 
 internal sealed class FakeProfiles : IProfileGateway

@@ -202,9 +202,15 @@ public class SharedTableIntegrationTests
         var id = _service.List().Single().Id;
         await _service.JoinAsync(id, _bob, Output());
 
-        // One debit each. The fake bank shares a balance, so two buy-ins is two debits.
+        // One debit each, and each out of that player's OWN stash.
+        //
+        // This line used to expect two buy-ins off one balance, because the fake bank kept
+        // a single wallet for the whole table -- so the assertion held whether or not the
+        // service crossed the two players, which is the thing it was written to rule out.
+        // The fake is per session now and the number is the one a player would see.
         Assert.Equal(2, _bank.Debits);
-        Assert.Equal(Stash - (2 * BuyIn), _bank.GetBalance(_alice, Wallet.Roubles));
+        Assert.Equal(Stash - BuyIn, _bank.GetBalance(_alice, Wallet.Roubles));
+        Assert.Equal(Stash - BuyIn, _bank.GetBalance(_bob, Wallet.Roubles));
 
         // Each is recorded as owed, individually.
         Assert.Equal(BuyIn, _escrow.Get(_alice)?.Chips);
@@ -220,8 +226,14 @@ public class SharedTableIntegrationTests
         Assert.Equal(id, _store.For(_alice)?.Id);
 
         // Nobody minted anything: one credit, for exactly the stack Bob was sitting on.
+        //
+        // No hand was played, so his stack is still the buy-in and he is back where he
+        // started -- while Alice, who is still sitting there, is still down hers. Under
+        // the old shared-purse fake this read `Stash - BuyIn`, which was Alice's number
+        // wearing Bob's name.
         Assert.Equal(1, _bank.Credits);
-        Assert.Equal(Stash - BuyIn, _bank.GetBalance(_bob, Wallet.Roubles));
+        Assert.Equal(Stash, _bank.GetBalance(_bob, Wallet.Roubles));
+        Assert.Equal(Stash - BuyIn, _bank.GetBalance(_alice, Wallet.Roubles));
     }
 
     /// <summary>

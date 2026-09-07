@@ -24,7 +24,7 @@ namespace Blackjack.Client
     /// decides an outcome; the dealer's hole card is not in the response until the
     /// hand is over, so it could not cheat even by accident.
     /// </summary>
-    internal static class BlackjackPanel
+    internal static partial class BlackjackPanel
     {
         internal const string RootName = "BlackjackPanel";
 
@@ -162,7 +162,16 @@ namespace Blackjack.Client
 
                 // Resume rather than assume: a hand can still be live from an earlier
                 // visit, and /blackjack/state is what says so.
-                Render(BlackjackApi.State(), true);
+                //
+                // The shared table is asked first, because a player seated at one has
+                // money in a box there and the solo table's state would say nothing about
+                // it -- they would come back to an empty felt with a stake they could not
+                // see. It answers "you are not at a shared table" cheaply for everybody
+                // else, which is nearly everybody.
+                if (!ResumeShared())
+                {
+                    Render(BlackjackApi.State(), true);
+                }
             }
             catch (Exception ex)
             {
@@ -191,6 +200,15 @@ namespace Blackjack.Client
             if (_statsPanel != null && _statsPanel.activeSelf)
             {
                 ToggleStats();
+                return;
+            }
+
+            // The lobby is a sheet over the table, so escape puts it down rather than
+            // closing the table underneath it -- the same rule the stats sheet follows.
+            // It seats nobody and takes nothing, so backing out of it costs nothing.
+            if (_sharedPanel != null && _sharedPanel.activeSelf)
+            {
+                LeaveSharedLobby();
                 return;
             }
 
@@ -430,6 +448,16 @@ namespace Blackjack.Client
             var error = response["Error"]?.ToString();
             var note = response["Note"]?.ToString();
 
+            // A shared table arrives in its own field, because it is a different shape:
+            // several boxes rather than one player's hands. Read before the message is
+            // set, so the seat is right by the time anything is drawn against it.
+            var shared = response["SharedTable"] as JObject;
+
+            if (shared != null)
+            {
+                _yourSeat = response["YourSeat"]?.ToObject<int?>() ?? _yourSeat;
+            }
+
             if (!ok && !string.IsNullOrEmpty(error))
             {
                 Say(error, Bad);
@@ -441,6 +469,17 @@ namespace Blackjack.Client
             else if (!quiet)
             {
                 Say("", Faint);
+            }
+
+            if (shared != null)
+            {
+                if ((string)shared["Phase"] == "Settled")
+                {
+                    RefreshBalances();
+                }
+
+                RenderShared(shared, quiet);
+                return;
             }
 
             var round = response["Round"] as JObject;
@@ -458,6 +497,11 @@ namespace Blackjack.Client
         {
             Clear(_dealerCards);
             Clear(_handsRow);
+
+            // Other people's boxes belong to a shared table. Coming back to the solo one
+            // has to take them off the felt, or they sit there next to a hand they are
+            // nothing to do with.
+            Clear(_othersRow);
 
             var phase = round?["Phase"]?.ToString() ?? "AwaitingBet";
             var betting = phase == "AwaitingBet" || phase == "Settled";
@@ -663,7 +707,19 @@ namespace Blackjack.Client
                 return;
             }
 
-            var face = deal.GetComponent<Image>();
+            Grey(deal);
+        }
+
+        /// <summary>
+        /// Dulls a button that will refuse.
+        ///
+        /// Still clickable, deliberately: the refusal explains itself, and a button that
+        /// silently does nothing is worse than one that answers. Shared with the shared
+        /// table's BET, which is dulled for exactly the same reasons.
+        /// </summary>
+        private static void Grey(GameObject button)
+        {
+            var face = button.GetComponent<Image>();
             if (face != null)
             {
                 face.sprite = Textures.ButtonFace(
@@ -673,10 +729,10 @@ namespace Blackjack.Client
                     new Color(0.26f, 0.22f, 0.18f, 1f));
             }
 
-            var dealLabel = deal.GetComponentInChildren<TextMeshProUGUI>();
-            if (dealLabel != null)
+            var label = button.GetComponentInChildren<TextMeshProUGUI>();
+            if (label != null)
             {
-                dealLabel.color = new Color(0.50f, 0.48f, 0.46f, 1f);
+                label.color = new Color(0.50f, 0.48f, 0.46f, 1f);
             }
         }
 
@@ -945,6 +1001,7 @@ namespace Blackjack.Client
 
             // Under the table, on the dark, where there is room for a full-width bar.
             BuildStats(felt);
+            BuildSharedLobby(felt);
 
             BuildBottom(root);
             BuildConfirm(canvasObject.transform);
@@ -1212,6 +1269,13 @@ namespace Blackjack.Client
 
             _handsRow = NewRow("Hands", area, 48f);
             Stretch(_handsRow);
+
+            // The other boxes, under the player's own hand and outside the hand area so
+            // they cannot push it about. Empty and therefore invisible at a solo table --
+            // a row with nothing in it takes no space, so nothing had to be moved to make
+            // room for a feature most players will never turn on.
+            _othersRow = NewRow("Others", column, 16f);
+            SetSize(_othersRow, 940f, 96f);
         }
 
         /// <summary>
@@ -1246,7 +1310,25 @@ namespace Blackjack.Client
 
             _statsButton = Chip(footer, "STATS", 180f, ToggleStats);
 
-            _leave = Chip(footer, "LEAVE TABLE", 220f, Close);
+            // A second button rather than a screen in front of the table. Playing alone is
+            // what everybody has and what nearly everybody wants, and putting a choice
+            // between a player and the table they have always sat at would be a cost paid
+            // by all of them for something two of them use.
+            Chip(footer, "SHARED TABLES", 220f, () => ShowSharedLobby());
+
+            // One button, two meanings, and the shared one has money behind it: a stake in
+            // a box that was never dealt has to come back. `Close` merely hides the panel,
+            // which would leave that stake on a table nobody is looking at.
+            _leave = Chip(footer, "LEAVE TABLE", 220f, () =>
+            {
+                if (_shared)
+                {
+                    LeaveShared();
+                    return;
+                }
+
+                Close();
+            });
         }
 
         private static void BuildBetting(RectTransform parent)

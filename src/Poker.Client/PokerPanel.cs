@@ -850,8 +850,9 @@ namespace Poker.Client
             if (seated)
             {
                 // Both only ever arrive between hands, so nothing about the hand is being
-                // written over. Who it was is not worth saying: a seat somebody has just
-                // taken is named "Seat 3" by the server until they are dealt in.
+                // written over. Who it was is on the seat plaque, which the same redraw
+                // has just put their real name on -- repeating it in the status line would
+                // be saying twice what the table already shows.
                 SetStatus(string.Equals(kind, "joined", StringComparison.Ordinal)
                     ? "Somebody took a seat."
                     : "Somebody stood up.");

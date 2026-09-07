@@ -32,7 +32,26 @@ public sealed class FakeBank : IBank
     /// </summary>
     private readonly object _lock = new();
 
-    private readonly Dictionary<Wallet, int> _balances = new();
+    /// <summary>
+    /// What a session starts with. <see cref="Seed"/> writes here.
+    ///
+    /// A default rather than a seeded table because almost every test uses one session
+    /// and never names it -- asking each of them to seed a wallet first would be ceremony
+    /// for nothing.
+    /// </summary>
+    private readonly Dictionary<Wallet, int> _opening = new();
+
+    /// <summary>
+    /// **A wallet per session, not one for the table.**
+    ///
+    /// It was one until shared tables arrived, and that made the money assertions in a
+    /// two-player test weaker than they read: Alice buying in for 2,000,000 moved the
+    /// same number Bob's balance was read off, so "each player pays their own buy-in"
+    /// held whether or not the two were crossed. Found when blackjack's twin of this
+    /// fake handed a two-player test 900,000 where it expected 950,000 -- both stakes off
+    /// one purse.
+    /// </summary>
+    private readonly Dictionary<(string Session, Wallet Wallet), int> _balances = new();
 
     private int _debits;
 
@@ -50,11 +69,22 @@ public sealed class FakeBank : IBank
     /// <summary>Set when a debit was refused, so a test can tell a refusal from a bug.</summary>
     public int RefusedDebits => Volatile.Read(ref _refusedDebits);
 
+    /// <summary>
+    /// Sets what every session holds in this wallet, including ones already touched.
+    ///
+    /// Applies to everybody rather than to one player, so a test that seeds a stash before
+    /// two people sit down does not have to name them both.
+    /// </summary>
     public void Seed(Wallet wallet, int amount)
     {
         lock (_lock)
         {
-            _balances[wallet] = amount;
+            _opening[wallet] = amount;
+
+            foreach (var key in _balances.Keys.Where(key => key.Wallet == wallet).ToList())
+            {
+                _balances[key] = amount;
+            }
         }
     }
 
@@ -62,7 +92,7 @@ public sealed class FakeBank : IBank
     {
         lock (_lock)
         {
-            return _balances.GetValueOrDefault(wallet);
+            return Held(sessionId, wallet);
         }
     }
 
@@ -70,7 +100,7 @@ public sealed class FakeBank : IBank
     {
         lock (_lock)
         {
-            var balance = _balances.GetValueOrDefault(wallet);
+            var balance = Held(sessionId, wallet);
 
             if (amount <= 0 || balance < amount)
             {
@@ -78,7 +108,7 @@ public sealed class FakeBank : IBank
                 return false;
             }
 
-            _balances[wallet] = balance - amount;
+            _balances[(sessionId.ToString(), wallet)] = balance - amount;
             Movements.Add((wallet, -amount));
             _debits++;
 
@@ -95,11 +125,17 @@ public sealed class FakeBank : IBank
                 return;
             }
 
-            _balances[wallet] = _balances.GetValueOrDefault(wallet) + amount;
+            _balances[(sessionId.ToString(), wallet)] = Held(sessionId, wallet) + amount;
             Movements.Add((wallet, amount));
             _credits++;
         }
     }
+
+    /// <summary>Caller holds <see cref="_lock"/>.</summary>
+    private int Held(MongoId sessionId, Wallet wallet) =>
+        _balances.TryGetValue((sessionId.ToString(), wallet), out var held)
+            ? held
+            : _opening.GetValueOrDefault(wallet);
 
     /// <summary>Roubles stack to a million on a stock server; dollars and euros to 50,000.</summary>
     public int MaxStackSize(Wallet wallet) => wallet switch

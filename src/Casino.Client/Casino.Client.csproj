@@ -65,7 +65,9 @@
     <Compile Include="..\Poker.Client\SharedPokerApi.cs"    Link="Games\Poker\SharedPokerApi.cs" />
 
     <Compile Include="..\Blackjack.Client\BlackjackPanel.cs" Link="Games\Blackjack\BlackjackPanel.cs" />
+    <Compile Include="..\Blackjack.Client\BlackjackSharedPanel.cs" Link="Games\Blackjack\BlackjackSharedPanel.cs" />
     <Compile Include="..\Blackjack.Client\BlackjackApi.cs"   Link="Games\Blackjack\BlackjackApi.cs" />
+    <Compile Include="..\Blackjack.Client\SharedBlackjackApi.cs" Link="Games\Blackjack\SharedBlackjackApi.cs" />
 
     <Compile Include="..\SlotMachine.Client\SlotPanel.cs" Link="Games\SlotMachine\SlotPanel.cs" />
     <Compile Include="..\SlotMachine.Client\ReelView.cs"  Link="Games\SlotMachine\ReelView.cs" />
