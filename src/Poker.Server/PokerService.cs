@@ -213,13 +213,25 @@ public class PokerService(
         // fine -- the table numbers whatever it does not get.
         var seatNames = names.Take(request.Seats - 1, rng);
 
+        // The player's own nickname here too, even though nobody else can see this table.
+        //
+        // Not needed for a solo game, and done anyway so there is ONE rule: the table
+        // stores real names and the panel is what says "you", because the panel is the
+        // only layer that knows who is looking. Leaving solo on the engine's "You"
+        // fallback would mean the panel had to special-case a magic string, and a magic
+        // string is how the shared table came to show one person's friend as "You".
         var table = new HoldemTable(
             rules,
             request.Seats,
             rng,
             engineLog,
             agents.Cast<IPokerAgent>().ToList(),
-            seatNames);
+            seatNames,
+            humanNames: new Dictionary<int, string>
+            {
+                [HoldemTable.PlayerSeatIndex] =
+                    profiles.NameOf(sessionId) ?? "You",
+            });
 
         tables.Set(sessionId, new PlayerSession
         {

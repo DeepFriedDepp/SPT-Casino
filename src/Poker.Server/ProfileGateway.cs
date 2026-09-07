@@ -15,6 +15,32 @@ public class ProfileGateway(ProfileHelper profileHelper, SaveServer saveServer) 
     /// <summary>Money that is not flushed to disk did not move.</summary>
     public async Task SaveAsync(MongoId sessionId) => await saveServer.SaveProfileAsync(sessionId);
 
+    /// <summary>
+    /// The PMC nickname, or null if it cannot be read.
+    ///
+    /// Wrapped in the same try as <see cref="HasProfile"/> and for the same reason:
+    /// `GetPmcProfile` throws on an unresolved session rather than returning null, and a
+    /// seat label is not worth turning a request into a 500 over.
+    /// </summary>
+    public string? NameOf(MongoId sessionId)
+    {
+        if (sessionId == MongoId.Empty())
+        {
+            return null;
+        }
+
+        try
+        {
+            var name = profileHelper.GetPmcProfile(sessionId)?.Info?.Nickname;
+
+            return string.IsNullOrWhiteSpace(name) ? null : name;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public bool HasProfile(MongoId sessionId)
     {
         // GetPmcProfile throws on an empty id rather than returning null, so asking it

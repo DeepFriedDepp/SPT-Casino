@@ -255,20 +255,33 @@ public class SharedPokerService(
 
         var seatNames = names.Take(request.Seats - 1, rng);
 
+        // The host's own PMC nickname, and NOT "You".
+        //
+        // "You" is what the engine falls back to for an unnamed person, and it is right
+        // in a one-player game and wrong the instant there are two: it is a relationship
+        // to whoever is looking, not a name, so storing it on the table sends the same
+        // word to everybody. That is exactly how it went wrong in play -- one player saw
+        // their friend labelled "You" while the friend saw them as "Seat 1".
+        //
+        // So the table stores real names for everybody, and the PANEL is what says "you",
+        // because the panel is the only layer that knows who is looking.
+        var hostName = NameFor(sessionId, HoldemTable.PlayerSeatIndex);
+
         var engine = new HoldemTable(
             rules,
             request.Seats,
             rng,
             engineLog,
             agents.Cast<IPokerAgent>().ToList(),
-            seatNames);
+            seatNames,
+            humanNames: new Dictionary<int, string> { [HoldemTable.PlayerSeatIndex] = hostName });
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         var table = new SharedTable
         {
             Id = tableId,
-            HostName = "Host",
+            HostName = hostName,
             Table = engine,
             Agents = agents,
             Characters = characters,
@@ -335,7 +348,9 @@ public class SharedPokerService(
 
         escrow.Record(sessionId, table.Wallet, table.BuyIn);
 
-        var name = $"Seat {free.Index}";
+        // Their real nickname, not "Seat 3". This was a placeholder that shipped, and it
+        // is half of what everybody saw wrong at a shared table.
+        var name = NameFor(sessionId, free.Index);
 
         try
         {
@@ -560,6 +575,19 @@ public class SharedPokerService(
             table.BigBlind,
             table.Wallet.ToString(),
             table.Table.Street is not (HoldemStreet.Idle or HoldemStreet.Showdown));
+
+    /// <summary>
+    /// What to call the person in a seat.
+    ///
+    /// Their PMC nickname, so everybody at the table sees the same name for them and it
+    /// is the name they are known by. Falls back to the seat number rather than refusing
+    /// to seat somebody: a profile that will not give up its nickname is a cosmetic
+    /// problem, and "Seat 3" beside a real stack is better than no game.
+    ///
+    /// Never "You". See <see cref="IProfileGateway.NameOf"/>.
+    /// </summary>
+    private string NameFor(MongoId sessionId, int seatIndex) =>
+        profiles.NameOf(sessionId) ?? $"Seat {seatIndex}";
 
     /// <summary>Notes that this player is still there, so their seat is not timed out.</summary>
     private static void Touch(SharedTable table, MongoId sessionId)

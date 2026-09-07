@@ -33,18 +33,22 @@ public class SharedTableIntegrationTests
     private readonly FakeBank _bank = new();
     private readonly FakeEscrow _escrow = new();
     private readonly SharedTableStore _store = new();
+    private readonly FakeProfiles _profiles = new();
     private readonly SharedPokerService _service;
 
     public SharedTableIntegrationTests()
     {
         _bank.Seed(Wallet.Roubles, Stash);
 
+        _profiles.Names[_alice.ToString()] = "Ragman_Fan";
+        _profiles.Names[_bob.ToString()] = "Nikita";
+
         _service = new SharedPokerService(
             _bank,
             new TableGate(),
             new SessionGate(),
             _store,
-            new FakeProfiles(),
+            _profiles,
             _escrow,
             new FakeNames(),
             new CasinoSocket(new Silent<CasinoSocket>()),
@@ -102,6 +106,86 @@ public class SharedTableIntegrationTests
             Assert.Contains($"\"{code}\"", bobSees);
             Assert.DoesNotContain($"\"{code}\"", aliceSees);
         }
+    }
+
+    /// <summary>
+    /// Everybody at the table is called by their own name, and nobody is called "You".
+    ///
+    /// This one is here because the first version shipped and was played, and the whole
+    /// suite was green while it was wrong. Two people sat down and saw:
+    ///
+    ///   * the host labelled "You" -- to BOTH of them, because the engine's fallback for
+    ///     an unnamed person is the word "You" and that is a relationship to whoever is
+    ///     looking, not a name. Stored on the table, it reaches everybody.
+    ///   * the joiner labelled "Seat 1", because the service passed a placeholder that
+    ///     was never replaced with anything real.
+    ///
+    /// Neither is visible from a unit test that only asserts about money or turn order,
+    /// and neither is visible to one player playing alone. It took two people at one
+    /// table to see it, which is exactly the class of defect this test now covers.
+    ///
+    /// The rule it pins: **the table stores real names, and only the panel says "you"**,
+    /// because the panel is the one layer that knows who is looking.
+    /// </summary>
+    [Fact]
+    public async Task EverybodyIsCalledByTheirOwnNameAndNobodyIsCalledYou()
+    {
+        await _service.CreateAsync(Open(), _alice, Output());
+        var id = _service.List().Single().Id;
+        await _service.JoinAsync(id, _bob, Output());
+
+        var table = _store.Get(id)!;
+
+        var aliceSeat = table.SeatOf(_alice)!.Index;
+        var bobSeat = table.SeatOf(_bob)!.Index;
+
+        Assert.Equal("Ragman_Fan", table.Table.Seats[aliceSeat].Name);
+        Assert.Equal("Nikita", table.Table.Seats[bobSeat].Name);
+
+        // Not "You", and not a seat number, anywhere a person is sitting.
+        foreach (var seat in table.Table.Seats.Where(s => s.IsPlayer))
+        {
+            Assert.NotEqual("You", seat.Name);
+            Assert.DoesNotContain("Seat ", seat.Name);
+        }
+
+        // And both of them see the same names, which is the half that was inverted:
+        // each player used to see a different word for the same chair.
+        var asAlice = (await _service.StateAsync(_alice)).Table!;
+        var asBob = (await _service.StateAsync(_bob)).Table!;
+
+        foreach (var index in new[] { aliceSeat, bobSeat })
+        {
+            Assert.Equal(
+                asAlice.Seats.Single(s => s.Index == index).Name,
+                asBob.Seats.Single(s => s.Index == index).Name);
+        }
+
+        // The lobby names the host too, rather than the word "Host".
+        Assert.Equal("Ragman_Fan", table.HostName);
+    }
+
+    /// <summary>
+    /// A profile that will not give up a nickname still gets a seat.
+    ///
+    /// Falling back rather than refusing: a nameless seat is cosmetic, and turning down
+    /// somebody's buy-in over a label they cannot see would be a much worse trade.
+    /// </summary>
+    [Fact]
+    public async Task ANamelessProfileFallsBackToTheSeatNumber()
+    {
+        _profiles.Names.Clear();
+
+        await _service.CreateAsync(Open(), _alice, Output());
+        var id = _service.List().Single().Id;
+        var joined = await _service.JoinAsync(id, _bob, Output());
+
+        Assert.True(joined.Ok, joined.Error);
+
+        var table = _store.Get(id)!;
+        var bobSeat = table.SeatOf(_bob)!.Index;
+
+        Assert.Equal($"Seat {bobSeat}", table.Table.Seats[bobSeat].Name);
     }
 
     /// <summary>

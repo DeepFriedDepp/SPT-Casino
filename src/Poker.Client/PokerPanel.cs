@@ -1198,8 +1198,19 @@ namespace Poker.Client
                 isTurn ? 3 : isSomebody ? 2 : 1);
             face.type = Image.Type.Sliced;
 
+            // Your own seat shows YOUR NAME with "(you)" after it, rather than the bare
+            // word YOU. At a shared table the name is the useful half -- your friend has
+            // to be able to point at a seat and say whose it is, and the two of you
+            // reading different words for the same chair is how the first version of
+            // this went wrong. The marker stays because the plaque is small, the seats
+            // are rotated so yours is at the bottom, and losing track of which is yours
+            // mid-hand is worse than a slightly longer label.
             var title = NewText(
-                "Name", plaque, isPlayer ? "YOU" : name, isPlayer ? 20f : 18f, TextAlignmentOptions.Center);
+                "Name",
+                plaque,
+                isPlayer ? name + "  (you)" : name,
+                isPlayer ? 19f : 18f,
+                TextAlignmentOptions.Center);
 
             title.rectTransform.anchorMin = new Vector2(0f, 1f);
             title.rectTransform.anchorMax = new Vector2(1f, 1f);

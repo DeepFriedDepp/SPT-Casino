@@ -53,6 +53,21 @@ public interface IProfileGateway
 {
     bool HasProfile(MongoId sessionId);
 
+    /// <summary>
+    /// The player's PMC nickname -- what everybody else at a shared table calls them.
+    ///
+    /// Needed because a seat's name used to be decided by the ENGINE, which called every
+    /// person at the table "You". That reads correctly in a one-player game and is wrong
+    /// the moment there are two: "You" is not a name, it is a relationship to whoever is
+    /// looking, and storing it on the table means the same string reaches everybody. In
+    /// play that came out as one person seeing their friend labelled "You" while the
+    /// friend saw them as "Seat 1".
+    ///
+    /// Null when the profile cannot be read. Callers fall back rather than failing -- a
+    /// nameless seat is a cosmetic problem and refusing to seat somebody over it is not.
+    /// </summary>
+    string? NameOf(MongoId sessionId);
+
     /// <summary>Flushes changes to disk. Money that is not saved did not move.</summary>
     Task SaveAsync(MongoId sessionId);
 }

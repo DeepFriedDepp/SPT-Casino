@@ -118,6 +118,12 @@ public sealed class FakeProfiles : IProfileGateway
     /// <summary>Interlocked because `Saves++` from two threads silently loses one.</summary>
     public int Saves => Volatile.Read(ref _saves);
 
+    /// <summary>A nickname per session, so a test can tell two seats apart by name.</summary>
+    public Dictionary<string, string> Names { get; } = new();
+
+    public string? NameOf(MongoId sessionId) =>
+        Names.TryGetValue(sessionId.ToString(), out var name) ? name : null;
+
     public bool HasProfile(MongoId sessionId) => Exists;
 
     public Task SaveAsync(MongoId sessionId)

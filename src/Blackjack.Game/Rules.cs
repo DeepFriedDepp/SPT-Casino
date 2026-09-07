@@ -41,4 +41,14 @@ public sealed record Rules
     public int MinBet { get; init; } = 1_000;
 
     public int MaxBet { get; init; } = 500_000;
+
+    /// <summary>
+    /// The most boxes a table can have. Seven is the real-world number and the shoe
+    /// is sized for it: eight seats splitting and doubling out of one six-deck shoe
+    /// is already close to drawing it dry inside a single round.
+    ///
+    /// A ceiling rather than a fixed count -- a table is one box unless the caller
+    /// asks for more, which is what keeps a solo game exactly what it always was.
+    /// </summary>
+    public int MaxSeats { get; init; } = 7;
 }
