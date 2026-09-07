@@ -14,6 +14,25 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      For HttpContext, and nothing else. IWebSocketConnectionHandler, which
+      CasinoSocket implements, takes one in three of its five members, and
+      SPTarkov.Server.Core carries no framework reference of its own. Without this line
+      the interface type resolves and the method signatures do not, which reads as
+      CS0246 on HttpContext plus three CS0535 "does not implement interface member" and
+      looks like a wrong SPT version rather than a missing framework reference.
+
+      A FrameworkReference rather than switching to Microsoft.NET.Sdk.Web: the Web SDK
+      would also give this assembly an implicit entry point, a launch profile and
+      static web asset targets, none of which a mod library wants. This is
+      reference only at build time and adds nothing to the output, because the server
+      that loads this assembly is the one hosting Kestrel and already has ASP.NET Core.
+
+      (XML comments cannot contain a double hyphen, so this block does not use the
+      house dash. That has broken a build in this repo more than once.)
+    -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+
     <PackageReference Include="SPTarkov.Server.Core" Version="4.0.13">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>

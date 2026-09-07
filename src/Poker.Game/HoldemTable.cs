@@ -3,9 +3,10 @@ namespace Poker.Game;
 /// <summary>
 /// One no-limit hold'em cash table: a button, blinds, four streets and a pot.
 ///
-/// The player sits at seat 0 and their decisions arrive as method calls. Every other
-/// seat has its own <see cref="IPokerAgent"/> and acts on its own, so the table runs
-/// itself between the player's turns.
+/// The people sit where the caller says -- seat 0 alone unless told otherwise -- and
+/// their decisions arrive as method calls. Every other seat has its own
+/// <see cref="IPokerAgent"/> and acts on its own, so the table runs itself between
+/// their turns.
 ///
 /// The engine owns the entire rule set. The transport above it converts a view to
 /// JSON and moves currency; it decides nothing.
@@ -24,6 +25,9 @@ public sealed class HoldemTable
     private readonly List<HoldemSeat> _seats = [];
     private readonly Dictionary<int, IPokerAgent> _agents = [];
     private readonly List<Card> _community = [];
+
+    /// <summary>The seats a person sits in, ascending. Never empty.</summary>
+    private readonly List<int> _humans;
 
     private int _button = -1;
     private int _actor = -1;
@@ -45,8 +49,10 @@ public sealed class HoldemTable
         Random? rng = null,
         IGameLog? log = null,
         IReadOnlyList<IPokerAgent>? agents = null,
-        IReadOnlyList<string>? names = null)
-        : this(rules ?? new HoldemRules(), new Deck(rng, log), seats, log, agents, names)
+        IReadOnlyList<string>? names = null,
+        IReadOnlyCollection<int>? humanSeats = null,
+        IReadOnlyDictionary<int, string>? humanNames = null)
+        : this(rules ?? new HoldemRules(), new Deck(rng, log), seats, log, agents, names, humanSeats, humanNames)
     {
     }
 
@@ -56,6 +62,22 @@ public sealed class HoldemTable
     /// engine has no business knowing where a good name comes from -- the mod pulls
     /// them from the game's own PMC list. Short or absent, the remaining seats fall
     /// back to their number.
+    ///
+    /// Indexed by bot, not by seat: the first name goes to the first bot seated,
+    /// whichever chair that is. Indexing it by seat would silently skip a name for
+    /// every person sitting to the left of a bot.
+    /// </param>
+    /// <param name="humanSeats">
+    /// Which chairs hold a person rather than an agent. Seat 0 alone by default, which
+    /// is every caller that predates two people sharing a table.
+    /// </param>
+    /// <param name="humanNames">
+    /// What to call the people, by seat. A person with no name here is "You", which is
+    /// right for the one-human table and is why this can stay optional. Keyed by seat
+    /// rather than given as a list parallel to <paramref name="humanSeats"/>, because
+    /// two collections that have to agree on an order are two collections that will
+    /// eventually disagree -- and the failure would be a player wearing somebody
+    /// else's name, which reads as a privacy bug rather than an ordering one.
     /// </param>
     public HoldemTable(
         HoldemRules rules,
@@ -63,7 +85,9 @@ public sealed class HoldemTable
         int seats = 2,
         IGameLog? log = null,
         IReadOnlyList<IPokerAgent>? agents = null,
-        IReadOnlyList<string>? names = null)
+        IReadOnlyList<string>? names = null,
+        IReadOnlyCollection<int>? humanSeats = null,
+        IReadOnlyDictionary<int, string>? humanNames = null)
     {
         _rules = rules;
         _deck = deck;
@@ -75,42 +99,110 @@ public sealed class HoldemTable
                 nameof(seats), seats, $"A hold'em table seats 2 to {rules.MaxSeats}. One player is not a game.");
         }
 
-        // One agent per seat, never one for the table. The parked UTH table took a
-        // single agent for every seat, which made its four seat-mates one person
-        // wearing four names -- and personality is the entire point of these.
-        if (agents is not null && agents.Count != seats - 1)
+        var humans = (humanSeats ?? new[] { PlayerSeatIndex }).ToList();
+
+        if (humans.Count == 0)
         {
             throw new ArgumentException(
-                $"A {seats}-seat table needs {seats - 1} agents, one per bot; got {agents.Count}.",
+                "A table with nobody at it has nothing to wait for; give it at least one human seat.",
+                nameof(humanSeats));
+        }
+
+        if (humans.Any(index => index < 0 || index >= seats))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(humanSeats),
+                string.Join(", ", humans),
+                $"A {seats}-seat table has seats 0 to {seats - 1}.");
+        }
+
+        if (humans.Distinct().Count() != humans.Count)
+        {
+            throw new ArgumentException(
+                $"Two people cannot share seat {humans.GroupBy(index => index).First(group => group.Count() > 1).Key}.",
+                nameof(humanSeats));
+        }
+
+        // Ascending, so "the first bot" and "the first name" mean the same thing here
+        // as they do to a caller reading the table left to right.
+        humans.Sort();
+        _humans = humans;
+
+        // One agent per bot seat, never one for the table. The parked UTH table took a
+        // single agent for every seat, which made its four seat-mates one person
+        // wearing four names -- and personality is the entire point of these.
+        //
+        // Checked even when `agents` is null, which it was not before. A null list used
+        // to build a table that dealt, posted blinds and only then died with a
+        // KeyNotFoundException the first time a bot was asked to decide -- a fault that
+        // lands after money has moved. That was survivable while "the bots" always
+        // meant "every seat but zero" and nobody could get the count wrong; now that
+        // the caller chooses the human seats, seats - humans is arithmetic done
+        // somewhere else, and arithmetic done somewhere else is arithmetic that arrives
+        // wrong. It has to fail here, before a card is dealt.
+        var bots = seats - humans.Count;
+        var seated = agents?.Count ?? 0;
+
+        if (seated != bots)
+        {
+            throw new ArgumentException(
+                $"A {seats}-seat table with {humans.Count} person(s) at it needs {bots} agents, "
+                + $"one per bot; got {seated}.",
                 nameof(agents));
         }
 
+        var botNumber = 0;
+
         for (var index = 0; index < seats; index++)
         {
-            var isPlayer = index == PlayerSeatIndex;
-            var botNumber = index - 1;
+            var isPlayer = humans.Contains(index);
+            string name;
 
-            var name = isPlayer
-                ? "You"
-                : names is not null && botNumber < names.Count && !string.IsNullOrWhiteSpace(names[botNumber])
+            if (isPlayer)
+            {
+                name = humanNames is not null
+                    && humanNames.TryGetValue(index, out var given)
+                    && !string.IsNullOrWhiteSpace(given)
+                        ? given
+                        : "You";
+            }
+            else
+            {
+                name = names is not null && botNumber < names.Count && !string.IsNullOrWhiteSpace(names[botNumber])
                     ? names[botNumber]
                     : $"Seat {index}";
+            }
 
             _seats.Add(new HoldemSeat(index, isPlayer, name, rules.BuyIn));
 
-            if (!isPlayer && agents is not null)
+            if (!isPlayer)
             {
-                _agents[index] = agents[index - 1];
+                // Non-null because the count was checked above, and it was checked
+                // above so that this line cannot be the thing that discovers it.
+                _agents[index] = agents![botNumber];
+                botNumber++;
             }
         }
     }
 
     /// <summary>
-    /// Where the person at the keyboard sits. Fixed, so the deal order does not depend
-    /// on a choice made elsewhere; which seat the client *draws* them at is
+    /// Where a person sits when nobody said otherwise, and the seat the one-human
+    /// shorthands -- <see cref="Player"/>, <see cref="Act(HoldemDecision)"/>,
+    /// <see cref="HoldemView.Of"/> -- are about.
+    ///
+    /// Still a constant, because a table built without <c>humanSeats</c> must deal
+    /// exactly as it always did. Which seat the client *draws* somebody at is
     /// presentation and does not reach the engine.
     /// </summary>
     public const int PlayerSeatIndex = 0;
+
+    /// <summary>
+    /// Which seats hold a person, ascending. One entry on an ordinary table.
+    ///
+    /// The list, rather than a count: the seats are what the caller needs -- to route
+    /// an action to the right session, and to build each person their own view.
+    /// </summary>
+    public IReadOnlyList<int> HumanSeats => _humans;
 
     public HoldemRules Rules => _rules;
 
