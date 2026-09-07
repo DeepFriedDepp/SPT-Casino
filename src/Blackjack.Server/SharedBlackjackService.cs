@@ -548,6 +548,22 @@ public class SharedBlackjackService(
         table.Occupants.TryRemove(seat, out _);
         table.LastSeenUtc.TryRemove(sessionId.ToString(), out _);
 
+        // **Released here, unconditionally, and not left to `store.Remove`.**
+        //
+        // `Remove` frees a table's occupants by walking `Occupants` -- and this player has
+        // just been taken out of it, so on the `last` branch there is nobody left to walk
+        // and their own claim would survive the table they closed. They are then held at a
+        // table that does not exist and every later open or join is refused with "You are
+        // already at a table" until the server restarts.
+        //
+        // The leak is invisible to the obvious check: `store.For` returns null, because the
+        // table really is gone. Only `TryClaim` can see it, and only by refusing.
+        //
+        // Poker escapes this by ordering -- it calls `Remove` before it touches the seat --
+        // which is a correctness that a later edit could reorder away without noticing.
+        // Releasing the leaver explicitly does not care what order anything else happens in.
+        store.Release(sessionId);
+
         if (last)
         {
             store.Remove(tableId);
@@ -555,7 +571,6 @@ public class SharedBlackjackService(
         else
         {
             table.Table.VacateSeat(seat);
-            store.Release(sessionId);
 
             await PushAsync(table, "left");
         }

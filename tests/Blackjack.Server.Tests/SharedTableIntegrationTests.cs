@@ -312,6 +312,50 @@ public class SharedTableIntegrationTests
         Assert.Empty(_service.List());
     }
 
+    /// <summary>
+    /// And the last person out is free to sit down somewhere else.
+    ///
+    /// **This is the one the closing test above misses.** `store.Remove` frees everybody at
+    /// a table by walking its occupants -- so removing the leaver from `Occupants` BEFORE
+    /// calling it leaves nobody to walk, and the claim on the person who just left survives
+    /// the table they left. They are then held at a table that does not exist, and every
+    /// subsequent open or join is refused with "You are already at a table" for the rest of
+    /// the server's life. Nothing short of a restart clears it.
+    ///
+    /// Poker gets this right by accident of ordering -- it calls `store.Remove` before it
+    /// touches the seat -- which is exactly why translating one implementation into another
+    /// needs its own test rather than its own confidence.
+    /// </summary>
+    [Fact]
+    public async Task TheLastPlayerOutCanSitDownAgain()
+    {
+        await _service.OpenAsync(Open(), _alice, new ItemEventRouterResponse());
+        Assert.True((await _service.LeaveAsync(_alice, new ItemEventRouterResponse())).Ok);
+
+        // Asserted by opening again rather than by reading the store, because the leak is
+        // INVISIBLE to the obvious check: `store.For` returns null either way -- the table
+        // really is gone -- and only `TryClaim` can see the claim, and only by refusing.
+        var again = await _service.OpenAsync(Open(), _alice, new ItemEventRouterResponse());
+
+        Assert.True(again.Ok, again.Error);
+    }
+
+    /// <summary>
+    /// The same, for the last player out of a table somebody else opened -- which is the
+    /// ordinary way a table empties: the host leaves first and a guest closes it.
+    /// </summary>
+    [Fact]
+    public async Task TheLastGuestOutCanSitDownAgain()
+    {
+        await _service.OpenAsync(Open(), _alice, new ItemEventRouterResponse());
+        await _service.JoinAsync(TableId(), _bob);
+
+        Assert.True((await _service.LeaveAsync(_alice, new ItemEventRouterResponse())).Ok);
+        Assert.True((await _service.LeaveAsync(_bob, new ItemEventRouterResponse())).Ok);
+
+        Assert.True((await _service.OpenAsync(Open(), _bob, new ItemEventRouterResponse())).Ok);
+    }
+
     private string TableId() => _store.All.Single().Id;
 
     /// <summary>

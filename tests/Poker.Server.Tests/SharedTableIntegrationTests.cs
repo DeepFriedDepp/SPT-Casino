@@ -296,12 +296,29 @@ public class SharedTableIntegrationTests
 
         Assert.Null(_store.Get(id));
         Assert.Empty(_service.List());
-        Assert.Null(_store.For(_alice));
 
-        // Both whole again: two buy-ins out, two stacks back.
+        // **Asserted by sitting down again, not by reading the store.**
+        //
+        // `_store.For` returns null whether or not the claim leaked -- the table really is
+        // gone, and `For` resolves the claim THROUGH the table. Only `TryClaim` can see a
+        // claim on a table that no longer exists, and only by refusing. So the line that
+        // used to stand here could not fail, and the blackjack twin of this code shipped
+        // with exactly that leak: `store.Remove` frees a table's occupants by walking them,
+        // and the last player out had already been taken off the list.
+        //
+        // Poker is correct here by ordering -- it calls `Remove` before it touches the seat
+        // -- which is the kind of correctness a later edit reorders away in silence. This is
+        // what would notice. It comes after the money assertions below, because sitting down
+        // again takes another buy-in.
+
+        // Both whole again: each paid their own buy-in and got their own stack back.
         Assert.Equal(Stash, _bank.GetBalance(_alice, Wallet.Roubles));
+        Assert.Equal(Stash, _bank.GetBalance(_bob, Wallet.Roubles));
         Assert.Null(_escrow.Get(_alice));
         Assert.Null(_escrow.Get(_bob));
+
+        Assert.True((await _service.CreateAsync(Open(), _alice, Output())).Ok);
+        Assert.True((await _service.CreateAsync(Open(), _bob, Output())).Ok);
     }
 
     [Fact]
