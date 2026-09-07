@@ -67,6 +67,19 @@ public class SharedPokerService(
     /// <summary>What a player is told when the table has moved without them asking.</summary>
     private const string Moved = "table";
 
+    /// <summary>
+    /// How long the table waits on a seat before folding it.
+    ///
+    /// Ninety seconds is chosen against the two ways it can be wrong. Too short and a
+    /// player who is thinking, or reading their mail, or was shot at in the hideout, has a
+    /// live hand thrown away for real chips. Too long and a table whose player has closed
+    /// the game is dead for the rest of the evening.
+    ///
+    /// The same number blackjack uses, deliberately: two tables in one casino that time out
+    /// differently is a difference nobody could explain to a player.
+    /// </summary>
+    private static readonly TimeSpan QuietAfter = TimeSpan.FromSeconds(90);
+
     // ---- the gated entrance --------------------------------------------------------
 
     /// <summary>Open tables anybody could join. No gate: it reads a snapshot and moves nothing.</summary>
@@ -150,6 +163,8 @@ public class SharedPokerService(
         }
 
         using var table = await tables.EnterAsync(seated.Id);
+        FoldTheAbsent(seated);
+
         using var player = await sessions.EnterAsync(sessionId);
 
         return await LeaveCoreAsync(seated.Id, sessionId, output);
@@ -164,6 +179,8 @@ public class SharedPokerService(
 
         using var table = await tables.EnterAsync(seated.Id);
 
+        FoldTheAbsent(seated);
+
         return await DealCoreAsync(seated.Id, sessionId);
     }
 
@@ -175,6 +192,8 @@ public class SharedPokerService(
         }
 
         using var table = await tables.EnterAsync(seated.Id);
+
+        FoldTheAbsent(seated);
 
         return await ActCoreAsync(seated.Id, request, sessionId);
     }
@@ -188,6 +207,8 @@ public class SharedPokerService(
         }
 
         using var table = await tables.EnterAsync(seated.Id);
+
+        FoldTheAbsent(seated);
 
         Touch(seated, sessionId);
 
@@ -633,6 +654,91 @@ public class SharedPokerService(
     /// </summary>
     private string NameFor(MongoId sessionId, int seatIndex) =>
         profiles.NameOf(sessionId) ?? $"Seat {seatIndex}";
+
+    /// <summary>
+    /// Folds a seat whose player has gone, so the hand plays on without them.
+    ///
+    /// ## Why this has to exist
+    ///
+    /// The engine runs its own bots, so only a HUMAN seat needs a request to act. When that
+    /// person's game closes, nobody sends one -- and the table waits on them forever.
+    /// Standing up is refused mid-hand, so everybody else is stuck behind that seat with
+    /// their chips on the table and no way to reach them. Only a restart ends it, and only
+    /// by throwing the hand away.
+    ///
+    /// `LastSeenUtc` was written on every request and read nowhere. <see cref="PushAsync"/>
+    /// even carried a comment saying "the table plays on and their seat times out",
+    /// describing behaviour that did not exist -- which is worse than saying nothing,
+    /// because the next person to read it stops looking.
+    ///
+    /// ## Why folding
+    ///
+    /// The opposite of blackjack's choice, and both follow their game. Blackjack has no
+    /// fold, so an absent box stands and keeps whatever its hand wins. Hold'em does, and it
+    /// is the only move legal from every position without putting more money in -- checking
+    /// is illegal the moment there is a bet to answer, and calling would spend an absent
+    /// player's chips on a hand nobody is playing.
+    ///
+    /// Folding costs them what they had already put in, which is the ordinary rule for
+    /// somebody who walks away from a table.
+    ///
+    /// ## Where it is called from
+    ///
+    /// The gated entry points, after the table gate. It moves no real currency -- a fold
+    /// only rearranges chips, and chips become money at cash-out -- so unlike blackjack's
+    /// twin it needs no session gate and cannot deadlock against one.
+    ///
+    /// Driven by requests rather than a timer: the panel asks for the table whenever it
+    /// draws, so somebody still sitting there is the clock.
+    /// </summary>
+    private void FoldTheAbsent(SharedTable table)
+    {
+        if (table.Table.Street is HoldemStreet.Idle or HoldemStreet.Showdown)
+        {
+            return;
+        }
+
+        var cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (long)QuietAfter.TotalSeconds;
+
+        // Bounded rather than looped on the street: several people can be gone at once, and
+        // a seat that somehow refuses to fold would otherwise spin here holding the table
+        // gate. Five seats over four streets is well inside twenty.
+        for (var guard = 0; guard < 20; guard++)
+        {
+            if (table.Table.ActorSeat is not { } actor)
+            {
+                return;
+            }
+
+            if (!table.Seats.TryGetValue(actor, out var seat)
+                || seat.Kind != SeatKind.Human)
+            {
+                // A bot has the turn. Bots act on their own and never go quiet.
+                return;
+            }
+
+            // Absent means "has not been heard from", not "the socket dropped". A dropped
+            // socket is ordinary and does not mean somebody left the table.
+            if (seat.LastSeenUtc > cutoff)
+            {
+                return;
+            }
+
+            try
+            {
+                table.Table.Act(actor, new HoldemDecision(HoldemMove.Fold, 0));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+            {
+                // The engine will not fold that seat, so nothing here can move the hand on.
+                // Better to leave the table as it is than to loop on a refusal.
+                log.Error($"could not fold absent seat {actor} at {table.Id}: {ex.Message}");
+                return;
+            }
+
+            log.Info($"seat {actor} at {table.Id} folded -- nothing heard from them since");
+        }
+    }
 
     /// <summary>Notes that this player is still there, so their seat is not timed out.</summary>
     private static void Touch(SharedTable table, MongoId sessionId)
