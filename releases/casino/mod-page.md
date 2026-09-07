@@ -61,6 +61,14 @@ The bots are named out of the game's own PMC nickname list, so the seat that jus
 
 The blinds stay put whatever you set, so a smaller buy-in is a shorter stack and a livelier game rather than a cheaper one. 200,000 is ten big blinds; 5,000,000 is two hundred and fifty.
 
+**Or bring a friend.** Open a shared table and anybody else on the same server sees it in the list and can take a seat. The chairs nobody takes stay filled with the house's regulars — heads-up hold'em is a sharply different game from five handed, and two of you sitting down should not quietly change what you are playing.
+
+Each of you buys in from your own stash and cashes out your own stack. There is no shared pot of real roubles; the pot is chips, and chips only become money again when somebody stands up. Nobody can see anybody else's hole cards — the server sends each seat a table built for that seat, and the other hands are not in it at all.
+
+Moves show up without pressing anything. Somebody who closes the game mid-hand folds that hand and keeps their chips; the table carries on without them.
+
+Playing alone is unchanged and still what the button says by default. Everybody needs to be on the same server, which is what Fika is for — though the casino does not use Fika to do any of this, and could not: Fika's networking only exists inside a raid, and the casino lives in the menu.
+
 Your stack is yours. Stand up whenever you like and it goes back to your stash — and if the server dies mid-session, it is given back the next time you sit down.
 
 ### Roulette
@@ -104,9 +112,9 @@ The machine pays up to a thousand times the stake by default. **F12 → Slots �
 
 ## Installing
 
-Extract into your SPT folder — the one that holds `SPT_Runtime` — and start the server.
+Extract into your SPT folder — the one that holds `SPT` and `EscapeFromTarkov.exe` — and start the server.
 
-**Delete my old Blackjack and Poker mods first.** They are tables inside this one now, and it installs as one folder on each side: `BepInEx/plugins/Casino` and `SPT_Runtime/user/mods/Casino`.
+**Delete my old Blackjack and Poker mods first.** They are tables inside this one now, and it installs as one folder on each side: `BepInEx/plugins/Casino` and `SPT/user/mods/Casino`.
 
 Remove whichever of these you have:
 
@@ -115,9 +123,9 @@ BepInEx/plugins/Blackjack
 BepInEx/plugins/Poker
 BepInEx/plugins/Roulette
 
-SPT_Runtime/user/mods/Blackjack
-SPT_Runtime/user/mods/Poker
-SPT_Runtime/user/mods/Roulette
+SPT/user/mods/Blackjack
+SPT/user/mods/Poker
+SPT/user/mods/Roulette
 ```
 
 Leaving the old plugins gives you three tabs on the bar instead of one, and three copies of the same key handler arguing over the escape key. Leaving the old server mods gives you every route registered twice.

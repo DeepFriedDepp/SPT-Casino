@@ -6,7 +6,7 @@ lobby; the lobby has four tables.
 | | |
 | --- | --- |
 | **Blackjack** | Twenty-one against the dealer. |
-| **Poker** | No-limit hold'em against bots, seated under names drawn from the game's own PMC nickname list. |
+| **Poker** | No-limit hold'em against bots, seated under names drawn from the game's own PMC nickname list -- **or against a friend on the same server**. |
 | **Roulette** | A single-zero European wheel that actually spins, and a full betting cloth to play it from. |
 | **Slots** | Five reels and 243 ways, spinning the item icons out of your own install. Takes roubles, dollars or euros. |
 
@@ -17,6 +17,25 @@ out. If your stash is too full to take a payout, it arrives in the post instead.
 The house edge is real too, and it is computed rather than guessed at. Roulette keeps
 2.70% of everything staked on it; the slot machine returns 92.51% and keeps the rest.
 The other two are not charity either.
+
+## Playing with somebody else
+
+**Poker tables can be shared.** Open one and anybody else on the same server sees it in
+the list and can take a seat; the chairs nobody takes stay filled with bots, because
+heads-up hold'em is a sharply different game from five-handed and "me and a friend"
+should not silently change what the table is. Playing alone is unchanged and still the
+default.
+
+Each of you buys in from your own stash and cashes out your own stack. There is no
+shared pot of real currency -- the pot is chips, and chips only become money when
+somebody stands up. **Nobody can see anybody else's hole cards**: each player is sent a
+table built for their own seat, and another seat's cards are not in it at all, which is
+a different thing from being told not to draw them.
+
+Moves appear without pressing anything. That runs over SPT's own websocket rather than
+Fika: Fika's networking only exists inside a raid, and the casino lives in the menu.
+**Fika is still what puts everybody on one server** -- it is simply not what carries the
+table.
 
 ## Installing
 
