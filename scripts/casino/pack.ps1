@@ -22,7 +22,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$SPTPath = 'H:\SPT4.1.X',
+    [string]$SPTPath = 'C:\SPT',
     [string]$InstallPath,
 
     # Writes releases/casino/SPT_CasinoV<version>.zip, laid out relative to the SPT
@@ -42,6 +42,19 @@ $version = '1.1.0'
 # is published.
 $release = '1.1.0'
 $tables = @('Blackjack', 'Poker', 'Roulette', 'SlotMachine')
+
+# Where SPT keeps its server mods, RELATIVE TO THE INSTALL ROOT.
+#
+# This is "SPT" on the 4.0.x line and "SPT_Runtime" on 4.1.x, and getting it wrong is
+# the worst kind of install bug: the plugin loads, the tab appears, the lobby opens --
+# and every route 404s, because the server half is sitting in a folder SPT never reads.
+#
+# Read off a real 4.0.13 install rather than assumed: SPT.Server.exe lives in
+# "<root>\SPT\" and runs with that as its working directory, and ModLoader.LoadMods
+# walks "./user/mods/" relative to it -- so "<root>\SPT\user\mods\" is the folder that
+# actually gets loaded. On this box it holds 23 mods including fika-server, while
+# "<root>\SPT_Runtime\user\mods\" holds a single stray folder nothing reads.
+$serverRoot = 'SPT'
 $plugin = Join-Path $root 'src\Casino.Client\Casino.Client.csproj'
 $stage = Join-Path $root 'dist\casino'
 
@@ -78,10 +91,10 @@ foreach ($game in @('Casino', 'Roulette', 'Poker', 'Blackjack', 'SlotMachine')) 
 $art = (Get-ChildItem $pluginDir -Recurse -File | Measure-Object).Count - 1
 Write-Host "Staged the plugin and $art art file(s)." -ForegroundColor Green
 
-# One server folder, holding every assembly. SPT_Runtime is part of the path inside the
+# One server folder, holding every assembly. $serverRoot is part of the path inside the
 # zip rather than the folder you extract into: dropping that prefix produces something
 # that looks right and installs nothing.
-$modDir = Join-Path $stage 'SPT_Runtime\user\mods\Casino'
+$modDir = Join-Path $stage "$serverRoot\user\mods\Casino"
 New-Item -ItemType Directory -Force -Path $modDir | Out-Null
 
 $wanted = @('Casino.Server.dll', 'Casino.Server.pdb')
@@ -161,11 +174,34 @@ if (-not $InstallPath) {
     return
 }
 
-# 4.1.x keeps the server under SPT_Runtime; the plugins sit at the install root.
+# 4.0.x keeps the server under SPT\ (4.1.x used SPT_Runtime\); plugins sit at the root.
 $target = $InstallPath
 if (-not (Test-Path (Join-Path $target 'BepInEx'))) {
     throw "no BepInEx folder under '$target' -- that is not an SPT install root."
 }
+
+# Which subfolder the server really lives in, PROBED rather than assumed.
+#
+# scripts/poker/pack-mod.ps1 has worked this way for a while and its comment says why
+# better than this one could: "a mod that never loads looks exactly like a mod that
+# loaded and did nothing". This script did not have it, hardcoded the 4.1.x folder, and
+# would have installed the whole server half somewhere 4.0.13 never reads -- the plugin
+# loading, the tab appearing, and every route 404ing.
+#
+# Probing beats the $serverRoot constant used for the stage and the zip, because those
+# have to commit to one layout and this does not.
+$installedRoot = @('SPT', 'SPT_Runtime') |
+    ForEach-Object { Join-Path $target $_ } |
+    Where-Object { Test-Path (Join-Path $_ 'SPTarkov.Server.Core.dll') } |
+    Select-Object -First 1
+
+if (-not $installedRoot) {
+    throw ("No SPT server found under '$target' -- looked for SPT\ and SPT_Runtime\ " +
+        "containing SPTarkov.Server.Core.dll. Without it the server half would install " +
+        "into a folder SPT never reads, and the mod would look loaded but answer nothing.")
+}
+
+Write-Host "Server found at $installedRoot" -ForegroundColor DarkGray
 
 # The old plugins have to go, or the bar gets four tabs and the input tree four
 # patches. Moved aside rather than deleted: they are somebody's working install.
@@ -191,10 +227,10 @@ foreach ($old in $tables) {
 # Beside user/mods, never inside it: SPT walks every directory under mods and throws
 # "No Assemblies found in path" at Critical on one holding no assemblies. Parking the
 # old mods in there traded three folders for a stack trace on every boot.
-$retiredMods = Join-Path $target "SPT_Runtime\user\_replaced-by-SPT-Casino"
+$retiredMods = Join-Path $installedRoot "user\_replaced-by-SPT-Casino"
 
 foreach ($old in $tables) {
-    $dir = Join-Path $target "SPT_Runtime\user\mods\$old"
+    $dir = Join-Path $installedRoot "user\mods\$old"
     if (Test-Path $dir) {
         New-Item -ItemType Directory -Force -Path $retiredMods | Out-Null
         $to = Join-Path $retiredMods $old
@@ -275,8 +311,8 @@ Write-Host "Installed the plugin to $pluginDest" -ForegroundColor Green
 # A warning rather than an error, and the whole server half is skipped rather than
 # partly written: half an installed mod folder is a worse place to leave somebody than
 # an untouched one.
-$modStage = Join-Path $stage 'SPT_Runtime\user\mods\Casino'
-$modDest = Join-Path $target 'SPT_Runtime\user\mods\Casino'
+$modStage = Join-Path $stage "$serverRoot\user\mods\Casino"
+$modDest = Join-Path $installedRoot "user\mods\Casino"
 $locked = @()
 
 foreach ($dll in Get-ChildItem $modDest -Filter *.dll -ErrorAction SilentlyContinue) {
@@ -298,7 +334,14 @@ if ($locked.Count -gt 0) {
 else {
     $modFiles = Sync-Installed -Stage $modStage -Installed $modDest
 
-    Copy-Item (Join-Path $stage 'SPT_Runtime') -Destination $target -Recurse -Force
+    # The CONTENTS of the staged mod folder into the PROBED destination, rather than the
+    # staged tree onto the install root. Copying the tree assumes the install uses the
+    # same subfolder name the stage was built with, and on a mismatch it quietly creates
+    # a second, unread one beside the real server -- exactly the failure the probe above
+    # exists to prevent, reintroduced at the last line that touches disk.
+    New-Item -ItemType Directory -Force -Path $modDest | Out-Null
+    Copy-Item (Join-Path $modStage '*') -Destination $modDest -Recurse -Force
+
     Set-Content -Path (Join-Path $modDest $manifestName) -Value $modFiles -Encoding utf8
     Write-Host "Installed the server half to $modDest" -ForegroundColor Green
 }
