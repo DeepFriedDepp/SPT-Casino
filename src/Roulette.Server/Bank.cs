@@ -145,12 +145,12 @@ public class Bank(
             }
             catch (Exception ex)
             {
-                // Partial removal may already have happened, so the player could be
-                // short with nothing to show for it. Say exactly how much.
                 log.Error(
-                    $"RemoveItemByCount threw taking {take:N0} from stack {stack.Id}. "
-                    + $"{amount - remaining:N0} of {amount:N0} {wallet} may already be gone.",
+                    $"RemoveItemByCount threw taking {take:N0} from stack {stack.Id} of "
+                    + $"{amount:N0} {wallet}.",
                     ex);
+
+                PutBackWhatLeft(sessionId, wallet, before, output);
                 return false;
             }
 
@@ -160,6 +160,18 @@ public class Bank(
         var after = GetBalance(sessionId, wallet);
         log.Detail($"debit done: {wallet} {before:N0} -> {after:N0} (expected {before - amount:N0})");
 
+        if (remaining != 0)
+        {
+            // The stacks ran out before the amount did, even though GetBalance said
+            // there was enough. Whatever was taken has to go back for the same reason
+            // as the catch above.
+            log.Error(
+                $"debit came up {remaining:N0} {wallet} short of {amount:N0} with no stacks left.");
+
+            PutBackWhatLeft(sessionId, wallet, before, output);
+            return false;
+        }
+
         if (after != before - amount)
         {
             // The arithmetic disagreeing with the stash is the most valuable signal
@@ -168,9 +180,75 @@ public class Bank(
             log.Error($"debit mismatch: {wallet} is {after:N0} but should be {before - amount:N0}.");
         }
 
-        return remaining == 0;
+        return true;
     }
 
+
+    /// <summary>
+    /// Puts back whatever left the stash before a debit gave up.
+    ///
+    /// ## Why a failed debit cannot just return false
+    ///
+    /// A debit is a loop over stacks, and there is no transaction under it --
+    /// `RemoveItemByCount` mutates the profile one stack at a time. So a debit that
+    /// fails partway has already taken some of the money.
+    ///
+    /// **Every caller treats `false` as "nothing moved".** All four tables return
+    /// before writing their escrow row, and Roulette and Slots explicitly release the
+    /// row they had already written. So the money is gone from the stash with *nothing
+    /// on disk that records it* -- the lazy refund on next contact finds no row, and
+    /// the player has no route to recovery and no way to know they are owed anything.
+    /// Measured during analysis at 20,000-40,000 per occurrence.
+    ///
+    /// Putting it back restores the contract the callers already assume, which is why
+    /// this needs no change at any call site.
+    ///
+    /// ## Why it recomputes instead of trusting the loop
+    ///
+    /// `amount - remaining` is what the loop *believes* it took, and the throwing call
+    /// is exactly the one whose outcome is unknown -- `RemoveItemByCount` may have
+    /// decremented a stack before failing. Reading the balance back is ground truth and
+    /// costs one call.
+    ///
+    /// ## What this does NOT cover
+    ///
+    /// If the put-back itself fails, the money really is gone and all this can do is say
+    /// so loudly. `Credit` posts mail when the stash will not take the items, so the
+    /// realistic failure is SPT itself being in a bad state -- by which point the log is
+    /// the useful artefact.
+    ///
+    /// **Not covered by a test.** `Bank` takes concrete `InventoryHelper` and
+    /// `ProfileHelper`, whose constructors need a real config server, so the failure
+    /// cannot be injected without a running SPT. This path wants watching the first time
+    /// a debit genuinely fails on a live server.
+    /// </summary>
+    private void PutBackWhatLeft(
+        MongoId sessionId,
+        Wallet wallet,
+        int balanceBefore,
+        ItemEventRouterResponse output)
+    {
+        var lost = balanceBefore - GetBalance(sessionId, wallet);
+
+        if (lost <= 0)
+        {
+            return;
+        }
+
+        log.Error($"the debit failed partway -- putting {lost:N0} {wallet} back.");
+
+        try
+        {
+            Credit(sessionId, wallet, lost, output);
+        }
+        catch (Exception ex)
+        {
+            log.Error(
+                $"could not put back {lost:N0} {wallet} after a failed debit. That money has "
+                + "left the player's stash and is not recorded anywhere.",
+                ex);
+        }
+    }
     /// <summary>Pays the return back into the stash, respecting the stack limit.</summary>
     public void Credit(MongoId sessionId, Wallet wallet, int amount, ItemEventRouterResponse output)
     {
