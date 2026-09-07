@@ -21,13 +21,45 @@ namespace SlotMachine.Server;
 [Injectable]
 public class SlotService(
     IBank bank,
+    Casino.Server.SessionGate gate,
     IProfileGateway profiles,
     IEscrowStore escrow,
     IRandomSource random,
     IStatsStore stats,
     ISlotLog log)
 {
+    /// <summary>
+    /// One machine for every player, and deliberately not locked.
+    ///
+    /// It was claimed this races on a <see cref="System.Random"/>. It does not:
+    /// <see cref="RandomSource.Create"/> is <c>Random.Shared</c>, which is thread-safe,
+    /// and <c>Machine</c>'s own <c>?? new Random()</c> fallback fires only when it is
+    /// constructed with null -- which is the tests and the console tool, both
+    /// single-threaded. A <c>lock</c> here would serialise every player in the casino
+    /// behind one another for no gain at all.
+    /// </summary>
     private readonly Machine _machine = new(random.Create());
+
+    // ---- the gated entrance --------------------------------------------------------
+    //
+    // Every public method takes the player's gate and then calls an ungated `*Core`.
+    // That split is not style: SessionGate is NOT reentrant, so a public method calling
+    // another public method for the same session would deadlock against itself until
+    // the 30-second timeout fired. Renaming the bodies rather than leaving them public
+    // makes that mistake unavailable -- there is nothing gated left to call.
+    //
+    // Ping is gated because it is not the read it looks like. It refunds a stranded
+    // stake, and the stake it can find is the one the pull in progress recorded a line
+    // before it took the money -- so merely opening the panel during a pull handed the
+    // stake straight back and let that pull play for free.
+    //
+    // Stats is gated because `IStatsStore.Get` returns the live record, whose
+    // `ByCurrency` is a plain Dictionary that `PlayerStats.Record` writes to during a
+    // pull. Enumerating one under modification throws
+    // `InvalidOperationException: Collection was modified` out of the request thread.
+    // See `StatsCore` for why the copy it takes matters as much as the gate does.
+    //
+    // Neither can deadlock against the gate: neither calls anything gated.
 
     /// <summary>
     /// Cheap health check, and where the panel gets the machine's own numbers.
@@ -35,11 +67,45 @@ public class SlotService(
     /// The paytable, the limits and the return all travel from here rather than being
     /// written into the client, so the panel cannot advertise a payout the machine does
     /// not give.
+    ///
+    /// **Async, and it has to be.** This used to reach the refund through
+    /// `RefundStranded(...).GetAwaiter().GetResult()`, and a blocking wait inside a
+    /// gated section is the one place that cannot be left alone: the blocked thread is
+    /// a thread-pool thread, the continuation it is waiting for needs that same pool,
+    /// and it is holding the session's gate while it waits -- so nothing else for that
+    /// player can make progress either. Swapping one blocking wait for another was
+    /// never on. See <see cref="Casino.Server.SessionGate"/>.
     /// </summary>
-    public PingResponse Ping(MongoId sessionId, ItemEventRouterResponse output)
+    public async Task<PingResponse> PingAsync(MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await PingCoreAsync(sessionId, output);
+    }
+
+    /// <summary>Pulls the handle. See <see cref="PullCoreAsync"/>.</summary>
+    public async Task<SlotResponse> PullAsync(
+        PullRequest request, MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await PullCoreAsync(request, sessionId, output);
+    }
+
+    /// <summary>The lifetime record. See <see cref="StatsCore"/>.</summary>
+    public async Task<PlayerStats> Stats(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return StatsCore(sessionId);
+    }
+
+    // ---- the ungated work ----------------------------------------------------------
+
+    private async Task<PingResponse> PingCoreAsync(MongoId sessionId, ItemEventRouterResponse output)
     {
         var known = profiles.HasProfile(sessionId);
-        var refunded = RefundStranded(sessionId, output).GetAwaiter().GetResult();
+        var refunded = await RefundStranded(sessionId, output);
 
         return new PingResponse
         {
@@ -67,6 +133,10 @@ public class SlotService(
     /// <summary>
     /// Pulls the handle, and the only place in this table where money moves.
     ///
+    /// Ungated on purpose: <see cref="PullAsync"/> holds the session for the whole of
+    /// it, which is what makes the six steps below one transaction rather than six
+    /// things another request can land between.
+    ///
     /// The order is the whole of it, and it is the one the other three arrived at the
     /// hard way:
     ///
@@ -82,7 +152,7 @@ public class SlotService(
     ///    round. The other pays nothing and forgets it was owed.
     /// 6. **Save.** Money that is not flushed to disk did not move.
     /// </summary>
-    public async Task<SlotResponse> PullAsync(
+    private async Task<SlotResponse> PullCoreAsync(
         PullRequest request, MongoId sessionId, ItemEventRouterResponse output)
     {
         if (!profiles.HasProfile(sessionId))
@@ -168,7 +238,22 @@ public class SlotService(
         return new SlotResponse { Note = refunded, Pull = View(pull) };
     }
 
-    public PlayerStats Stats(MongoId sessionId) => stats.Get(sessionId);
+    /// <summary>
+    /// The lifetime record, **as a copy**.
+    ///
+    /// The copy is half the fix and the gate is the other half. <c>IStatsStore.Get</c>
+    /// hands back the live object, and what the caller does with it -- serialise it to
+    /// JSON -- happens after this has returned and the gate has been given up. A live
+    /// reference carried out of a gated section is not protected by having been fetched
+    /// inside one: the next pull would be adding a currency key to the very dictionary
+    /// the serialiser is walking, and that throws
+    /// <c>InvalidOperationException: Collection was modified</c> onto the request thread.
+    ///
+    /// So the walk that matters happens here, under the gate, where nothing can be
+    /// recording a pull at the same time, and the caller is handed something no other
+    /// request can touch.
+    /// </summary>
+    private PlayerStats StatsCore(MongoId sessionId) => stats.Get(sessionId).Snapshot();
 
     /// <summary>
     /// Gives back a stake left behind by a pull that never finished.

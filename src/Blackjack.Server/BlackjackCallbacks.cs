@@ -75,21 +75,26 @@ public class BlackjackCallbacks(
         return Respond(await service.ActAsync(info, sessionId, Output(sessionId)));
     }
 
-    public ValueTask<string> State(StateRequest info, MongoId sessionId)
+    // State, Stats and Ping await where they used to wrap a finished value in a
+    // ValueTask. The service takes the session's gate before it reads anything, and
+    // acquiring that is async -- so these three became async with it. Awaiting rather
+    // than blocking on `.Result` is not a preference: a blocked request thread inside
+    // a gated section is a thread the gate holder needs to resume its own await.
+    public async ValueTask<string> State(StateRequest info, MongoId sessionId)
     {
         Received("state", sessionId, null);
-        return new ValueTask<string>(Respond(service.State(sessionId, Output(sessionId))));
+        return Respond(await service.State(sessionId, Output(sessionId)));
     }
 
-    public ValueTask<string> Stats(StatsRequest info, MongoId sessionId)
+    public async ValueTask<string> Stats(StatsRequest info, MongoId sessionId)
     {
         Received("stats", sessionId, null);
-        return new ValueTask<string>(httpResponseUtil.NoBody(service.Stats(sessionId)));
+        return httpResponseUtil.NoBody(await service.Stats(sessionId));
     }
 
-    public ValueTask<string> Ping(PingRequest info, MongoId sessionId)
+    public async ValueTask<string> Ping(PingRequest info, MongoId sessionId)
     {
-        var response = service.Ping(sessionId);
+        var response = await service.Ping(sessionId);
 
         ReportStackLimitsOnce();
 
@@ -104,7 +109,7 @@ public class BlackjackCallbacks(
             log.Error("no profile for that session. If the id above is blank, the session cookie did not resolve.");
         }
 
-        return new ValueTask<string>(httpResponseUtil.NoBody(response));
+        return httpResponseUtil.NoBody(response);
     }
 
     private void Received(string route, MongoId sessionId, string? detail) =>

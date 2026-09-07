@@ -1,4 +1,5 @@
 using Blackjack.Game;
+using Casino.Server;
 using SPTarkov.Server.Core.Models.Common;
 
 namespace Blackjack.Server.Tests;
@@ -23,6 +24,7 @@ public class MoneyInvariantTests
     {
         var rng = new Random(seed);
         var bank = new FakeBank();
+        var gate = new SessionGate();
         var profiles = new FakeProfiles();
         var tables = new TableStore();
         var session = new MongoId();
@@ -30,7 +32,7 @@ public class MoneyInvariantTests
         tables.Seed(session, new BlackjackTable(new Rules(), new Random(seed)));
         bank.SetBalance(Wallet.Roubles, 100_000_000);
 
-        var service = new BlackjackService(bank, profiles, tables, new FakeStats(), new FakeEscrow());
+        var service = new BlackjackService(bank, gate, profiles, tables, new FakeStats(), new FakeEscrow());
         var previousBalance = bank.GetBalance(session, Wallet.Roubles);
 
         for (var round = 0; round < 400; round++)

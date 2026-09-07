@@ -31,6 +31,7 @@ namespace Roulette.Server;
 [Injectable]
 public class RouletteService(
     IBank bank,
+    Casino.Server.SessionGate gate,
     IProfileGateway profiles,
     IEscrowStore escrow,
     TableStore tables,
@@ -48,8 +49,96 @@ public class RouletteService(
     /// </summary>
     private const Wallet Currency = Wallet.Roubles;
 
+    // ---- the gated entrance --------------------------------------------------------
+    //
+    // Every public method takes the player's gate and then calls an ungated `*Core`.
+    // That split is not style: SessionGate is NOT reentrant, so a public method calling
+    // another public method for the same session would deadlock against itself until
+    // the 30-second timeout fired. Renaming the bodies rather than leaving them public
+    // makes that mistake unavailable -- there is nothing gated left to call.
+    //
+    // **Place, Remove and Clear are gated even though they move no money**, and on this
+    // table that is the important part rather than the pedantic part. `RouletteTable`
+    // keeps the cloth in a plain `List<Bet>` that all three write and the spin reads, so
+    // the exclusion unit here is the TABLE and not just the money-moving call:
+    //
+    //   * `SpinAsync` reads `table.Staked`, debits exactly that, and only then calls
+    //     `table.Spin()`, which re-sums the cloth. A `Place` landing in that window is
+    //     settled for free -- 900,000 slipped in behind a 100,000 stake pays out
+    //     1,800,000 against a 100,000 debit, deterministically, and it scales with
+    //     whatever the racer puts down. See `ConcurrencyTests`.
+    //   * Even without the money, `List<T>.Add` while `Sum()` enumerates it throws
+    //     `InvalidOperationException: Collection was modified` out of the request
+    //     thread, and `List<T>` growing under two writers corrupts rather than
+    //     miscounts.
+    //
+    // Ping is gated too, for the reason Poker's is: `bank.GetBalance` LINQ-walks
+    // `pmcData.Inventory.Items` while a debit inside the gate is structurally modifying
+    // that same list, and a read of a list being mutated is not a safe read.
+    //
+    // Ping, Place, Remove and Clear became async purely because acquiring the gate is
+    // async. Nothing about their work changed.
+
+    /// <summary>Cheap health check. See <see cref="PingCore"/>.</summary>
+    public async Task<PingResponse> Ping(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return PingCore(sessionId);
+    }
+
+    /// <summary>Reads the table. See <see cref="StateCoreAsync"/>.</summary>
+    public async Task<RouletteResponse> StateAsync(MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await StateCoreAsync(sessionId, output);
+    }
+
+    /// <summary>Puts chips on a spot. See <see cref="PlaceCore"/>.</summary>
+    public async Task<RouletteResponse> Place(PlaceRequest request, MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return PlaceCore(request, sessionId);
+    }
+
+    /// <summary>Lifts chips off a spot. See <see cref="RemoveCore"/>.</summary>
+    public async Task<RouletteResponse> Remove(RemoveRequest request, MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return RemoveCore(request, sessionId);
+    }
+
+    /// <summary>Takes the whole cloth back. See <see cref="ClearCore"/>.</summary>
+    public async Task<RouletteResponse> Clear(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return ClearCore(sessionId);
+    }
+
+    /// <summary>Turns the wheel. See <see cref="SpinCoreAsync"/>.</summary>
+    public async Task<RouletteResponse> SpinAsync(MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await SpinCoreAsync(sessionId, output);
+    }
+
+    /// <summary>Forgets the table. See <see cref="LeaveCoreAsync"/>.</summary>
+    public async Task<RouletteResponse> LeaveAsync(MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await LeaveCoreAsync(sessionId, output);
+    }
+
+    // ---- the ungated work ----------------------------------------------------------
+
     /// <summary>Cheap health check. Touches nothing and starts no game.</summary>
-    public PingResponse Ping(MongoId sessionId)
+    private PingResponse PingCore(MongoId sessionId)
     {
         var known = profiles.HasProfile(sessionId);
 
@@ -85,7 +174,7 @@ public class RouletteService(
     /// The table as it stands, and the first chance to notice a spin that never
     /// finished. See <see cref="RefundStranded"/>.
     /// </summary>
-    public async Task<RouletteResponse> StateAsync(MongoId sessionId, ItemEventRouterResponse output)
+    private async Task<RouletteResponse> StateCoreAsync(MongoId sessionId, ItemEventRouterResponse output)
     {
         var refunded = await RefundStranded(sessionId, output);
 
@@ -99,7 +188,7 @@ public class RouletteService(
     /// and hands it straight over. A refusal comes back with the table attached: the
     /// client's picture may simply have drifted, and redrawing it is the fix.
     /// </summary>
-    public RouletteResponse Place(PlaceRequest request, MongoId sessionId)
+    private RouletteResponse PlaceCore(PlaceRequest request, MongoId sessionId)
     {
         // Refused by name rather than defaulting. Enum.TryParse on an unknown string
         // leaves the value at zero, which here is Straight -- so a typo would put the
@@ -144,7 +233,7 @@ public class RouletteService(
     /// it, and a player who has stacked four chips on a number should be able to take
     /// one back rather than clearing the whole cloth.
     /// </summary>
-    public RouletteResponse Remove(RemoveRequest request, MongoId sessionId)
+    private RouletteResponse RemoveCore(RemoveRequest request, MongoId sessionId)
     {
         if (!Enum.TryParse<BetKind>(request.Kind, ignoreCase: true, out var kind))
         {
@@ -165,7 +254,7 @@ public class RouletteService(
         return Success(sessionId);
     }
 
-    public RouletteResponse Clear(MongoId sessionId)
+    private RouletteResponse ClearCore(MongoId sessionId)
     {
         var table = Table(sessionId);
 
@@ -200,7 +289,7 @@ public class RouletteService(
     ///    round. The other order pays nothing and forgets it was owed.
     /// 5. **Save.** Money that is not flushed to disk did not move.
     /// </summary>
-    public async Task<RouletteResponse> SpinAsync(MongoId sessionId, ItemEventRouterResponse output)
+    private async Task<RouletteResponse> SpinCoreAsync(MongoId sessionId, ItemEventRouterResponse output)
     {
         var refunded = await RefundStranded(sessionId, output);
         var table = Table(sessionId);
@@ -336,7 +425,7 @@ public class RouletteService(
     /// thing owed on the way out is a stake stranded by an interrupted spin, which is
     /// what <see cref="RefundStranded"/> is for.
     /// </summary>
-    public async Task<RouletteResponse> LeaveAsync(MongoId sessionId, ItemEventRouterResponse output)
+    private async Task<RouletteResponse> LeaveCoreAsync(MongoId sessionId, ItemEventRouterResponse output)
     {
         var refunded = await RefundStranded(sessionId, output);
 

@@ -1,4 +1,5 @@
 using Blackjack.Game;
+using Casino.Server;
 using SPTarkov.Server.Core.Models.Common;
 
 namespace Blackjack.Server.Tests;
@@ -13,12 +14,13 @@ public class EscrowTests
 
     private readonly MongoId _session = new();
     private readonly FakeBank _bank = new();
+    private readonly SessionGate _gate = new();
     private readonly FakeProfiles _profiles = new();
     private readonly FakeStats _stats = new();
     private readonly FakeEscrow _escrow = new();
     private readonly TableStore _tables = new();
 
-    private BlackjackService Service() => new(_bank, _profiles, _tables, _stats, _escrow);
+    private BlackjackService Service() => new(_bank, _gate, _profiles, _tables, _stats, _escrow);
 
     private BlackjackService WithDeal(string cards)
     {
@@ -76,7 +78,7 @@ public class EscrowTests
         // does not. That is precisely the state that loses a player's money.
         _tables.Clear(_session);
 
-        var response = Service().State(_session);
+        var response = await Service().State(_session);
 
         Assert.True(response.Ok);
         Assert.Equal([(Wallet.Roubles, Wager)], _bank.Credits);
@@ -97,7 +99,7 @@ public class EscrowTests
 
         // The round is still in progress, so the stake is not abandoned -- refunding
         // here would hand back money the player is still playing for.
-        var response = service.State(_session);
+        var response = await service.State(_session);
 
         Assert.Equal(RoundPhase.PlayerTurn, response.Round!.Phase);
         Assert.Empty(_bank.Credits);
@@ -135,18 +137,18 @@ public class EscrowTests
         await service.DealAsync(new DealRequest { Wager = 2, Wallet = nameof(Wallet.Bitcoin) }, _session);
         _tables.Clear(_session);
 
-        Service().State(_session);
+        await Service().State(_session);
 
         Assert.Equal([(Wallet.Bitcoin, 2)], _bank.Credits);
         Assert.Equal(4, _bank.GetBalance(_session, Wallet.Bitcoin));
     }
 
     [Fact]
-    public void NothingHappensWhenNothingIsOwed()
+    public async Task NothingHappensWhenNothingIsOwed()
     {
         var service = WithDeal("KS KH 5D 7C");
 
-        service.State(_session);
+        await service.State(_session);
 
         Assert.Empty(_bank.Credits);
         Assert.Empty(_bank.Debits);

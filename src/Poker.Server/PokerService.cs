@@ -21,14 +21,85 @@ namespace Poker.Server;
 [Injectable]
 public class PokerService(
     IBank bank,
+    Casino.Server.SessionGate gate,
     IProfileGateway profiles,
     TableStore tables,
     IEscrowStore escrow,
     INameSource names,
     IPokerLog log)
 {
+    // ---- the gated entrance --------------------------------------------------------
+    //
+    // Every public method takes the player's gate and then calls an ungated `*Core`.
+    // That split is not style: SessionGate is NOT reentrant, so a public method calling
+    // another public method for the same session would deadlock against itself until
+    // the 30-second timeout fired. Renaming the bodies rather than leaving them public
+    // makes that mistake unavailable -- there is nothing gated left to call.
+    //
+    // Ping and Stats are gated too, though they move no money. `bank.GetBalance` LINQ-
+    // walks `pmcData.Inventory.Items` while a debit inside the gate is structurally
+    // modifying that same list, and enumerating a List<T> under modification throws
+    // `InvalidOperationException: Collection was modified` straight out of the request
+    // thread. A read of a list being mutated is not a safe read. They cannot deadlock,
+    // because they move no money and call nothing gated.
+    //
+    // Ping, Deal and Act became async here purely because acquiring the gate is async.
+    // Nothing about their work changed.
+
     /// <summary>Cheap health check. Touches nothing and starts no game.</summary>
-    public PingResponse Ping(MongoId sessionId)
+    public async Task<PingResponse> Ping(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return PingCore(sessionId);
+    }
+
+    /// <summary>Buys in and sits down. See <see cref="SitCoreAsync"/>.</summary>
+    public async Task<PokerResponse> SitAsync(
+        SitRequest request,
+        MongoId sessionId,
+        ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await SitCoreAsync(request, sessionId, output);
+    }
+
+    /// <summary>Deals the next hand. See <see cref="DealCore"/>.</summary>
+    public async Task<PokerResponse> Deal(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return DealCore(sessionId);
+    }
+
+    /// <summary>Plays one action. See <see cref="ActCore"/>.</summary>
+    public async Task<PokerResponse> Act(ActRequest request, MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return ActCore(request, sessionId);
+    }
+
+    /// <summary>Reads the table. See <see cref="StateCoreAsync"/>.</summary>
+    public async Task<PokerResponse> StateAsync(MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await StateCoreAsync(sessionId, output);
+    }
+
+    /// <summary>Stands up and cashes out. See <see cref="LeaveCoreAsync"/>.</summary>
+    public async Task<PokerResponse> LeaveAsync(MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await LeaveCoreAsync(sessionId, output);
+    }
+
+    // ---- the ungated work ----------------------------------------------------------
+
+    private PingResponse PingCore(MongoId sessionId)
     {
         var known = profiles.HasProfile(sessionId);
 
@@ -55,7 +126,7 @@ public class PokerService(
         };
     }
 
-    public async Task<PokerResponse> SitAsync(SitRequest request, MongoId sessionId, ItemEventRouterResponse output)
+    private async Task<PokerResponse> SitCoreAsync(SitRequest request, MongoId sessionId, ItemEventRouterResponse output)
     {
         if (!profiles.HasProfile(sessionId))
         {
@@ -173,7 +244,7 @@ public class PokerService(
         return Success(sessionId) with { Note = note };
     }
 
-    public PokerResponse Deal(MongoId sessionId)
+    private PokerResponse DealCore(MongoId sessionId)
     {
         var session = tables.Get(sessionId);
 
@@ -211,7 +282,7 @@ public class PokerService(
         return Success(sessionId);
     }
 
-    public PokerResponse Act(ActRequest request, MongoId sessionId)
+    private PokerResponse ActCore(ActRequest request, MongoId sessionId)
     {
         var session = tables.Get(sessionId);
 
@@ -261,7 +332,7 @@ public class PokerService(
     /// callback can ask `EventOutputHolder` for one the same way `sit` and `leave`
     /// already do.
     /// </summary>
-    public async Task<PokerResponse> StateAsync(MongoId sessionId, ItemEventRouterResponse output)
+    private async Task<PokerResponse> StateCoreAsync(MongoId sessionId, ItemEventRouterResponse output)
     {
         var note = RefundAbandoned(sessionId, output);
 
@@ -286,7 +357,7 @@ public class PokerService(
     /// Stands up and takes the chips. Whatever is in front of the player converts back
     /// at one to the unit, however much or little that is.
     /// </summary>
-    public async Task<PokerResponse> LeaveAsync(MongoId sessionId, ItemEventRouterResponse output)
+    private async Task<PokerResponse> LeaveCoreAsync(MongoId sessionId, ItemEventRouterResponse output)
     {
         var session = tables.Get(sessionId);
 

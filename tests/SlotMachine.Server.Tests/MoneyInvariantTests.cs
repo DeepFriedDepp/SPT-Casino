@@ -251,14 +251,14 @@ public class MoneyInvariantTests
         bank.Seed(Wallet.Roubles, 0);
         escrow.Strand(Session, Wallet.Roubles, 35_000);
 
-        var first = service.Ping(Session, Output());
+        var first = await service.PingAsync(Session, Output());
 
         Assert.Equal(35_000, bank.GetBalance(Session, Wallet.Roubles));
         Assert.Null(escrow.Get(Session));
         Assert.NotNull(first.Note);
 
-        service.Ping(Session, Output());
-        service.Ping(Session, Output());
+        await service.PingAsync(Session, Output());
+        await service.PingAsync(Session, Output());
 
         Assert.Equal(35_000, bank.GetBalance(Session, Wallet.Roubles));
         Assert.Equal(1, bank.Credits);
@@ -312,7 +312,13 @@ public class MoneyInvariantTests
         var escrow = new FakeEscrow();
 
         var service = new SlotService(
-            bank, profiles, escrow, new FakeRandom(20260906), new FakeStats(), new QuietLog());
+            bank,
+            new Casino.Server.SessionGate(),
+            profiles,
+            escrow,
+            new FakeRandom(20260906),
+            new FakeStats(),
+            new QuietLog());
 
         return (service, bank, profiles, escrow);
     }

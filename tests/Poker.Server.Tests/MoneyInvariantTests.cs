@@ -55,7 +55,7 @@ public class MoneyInvariantTests
         var tables = new TableStore();
 
         return new Harness(
-            new PokerService(bank, profiles, tables, escrow, new FakeNames(), new SilentLog()),
+            new PokerService(bank, new Casino.Server.SessionGate(), profiles, tables, escrow, new FakeNames(), new SilentLog()),
             bank,
             escrow,
             profiles,
@@ -68,9 +68,9 @@ public class MoneyInvariantTests
         new() { Seats = seats, BuyIn = buyIn, BigBlind = bigBlind, Seed = seed };
 
     /// <summary>Plays one hand out, checking and calling. Returns false once busted.</summary>
-    private static bool PlayHand(Harness harness)
+    private static async Task<bool> PlayHand(Harness harness)
     {
-        var dealt = harness.Service.Deal(Session);
+        var dealt = await harness.Service.Deal(Session);
 
         if (!dealt.Ok)
         {
@@ -83,7 +83,7 @@ public class MoneyInvariantTests
         {
             var moves = dealt.Table.Options!.Moves;
 
-            dealt = harness.Service.Act(
+            dealt = await harness.Service.Act(
                 new ActRequest
                 {
                     Move = moves.Contains(HoldemMove.Check) ? "Check" : "Call",
@@ -118,7 +118,7 @@ public class MoneyInvariantTests
 
         var afterBuyIn = harness.Bank.GetBalance(Session, Wallet.Roubles);
 
-        for (var hand = 0; hand < 20 && PlayHand(harness); hand++)
+        for (var hand = 0; hand < 20 && await PlayHand(harness); hand++)
         {
         }
 
@@ -144,7 +144,7 @@ public class MoneyInvariantTests
         var sat = await harness.Service.SitAsync(Sit(seed: seed), Session, Output());
         Assert.True(sat.Ok, sat.Error);
 
-        for (var hand = 0; hand < 25 && PlayHand(harness); hand++)
+        for (var hand = 0; hand < 25 && await PlayHand(harness); hand++)
         {
         }
 
@@ -165,7 +165,7 @@ public class MoneyInvariantTests
         var harness = Build();
         await harness.Service.SitAsync(Sit(), Session, Output());
 
-        for (var hand = 0; hand < 10 && PlayHand(harness); hand++)
+        for (var hand = 0; hand < 10 && await PlayHand(harness); hand++)
         {
         }
 
@@ -186,7 +186,7 @@ public class MoneyInvariantTests
         var harness = Build();
         await harness.Service.SitAsync(Sit(), Session, Output());
 
-        for (var hand = 0; hand < 12 && PlayHand(harness); hand++)
+        for (var hand = 0; hand < 12 && await PlayHand(harness); hand++)
         {
         }
 
@@ -204,7 +204,7 @@ public class MoneyInvariantTests
         var harness = Build();
         await harness.Service.SitAsync(Sit(), Session, Output());
 
-        for (var hand = 0; hand < 12 && PlayHand(harness); hand++)
+        for (var hand = 0; hand < 12 && await PlayHand(harness); hand++)
         {
         }
 
@@ -349,14 +349,14 @@ public class MoneyInvariantTests
         var before = harness.Bank.GetBalance(Session, Wallet.Roubles);
         var hands = 0;
 
-        while (hands < 400 && PlayHand(harness))
+        while (hands < 400 && await PlayHand(harness))
         {
             hands++;
         }
 
         Assert.True(hands < 400, "the player never went broke, so this test proved nothing");
 
-        var response = harness.Service.Deal(Session);
+        var response = await harness.Service.Deal(Session);
 
         Assert.False(response.Ok);
         Assert.Contains("buy in again", response.Error);

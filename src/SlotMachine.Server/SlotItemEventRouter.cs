@@ -72,17 +72,24 @@ public sealed class SlotItemEventRouter(SlotItemEventCallbacks callbacks)
 [Injectable]
 public class SlotItemEventCallbacks(SlotService service, SlotLog log)
 {
-    public Task<ItemEventRouterResponse> Sync(MongoId sessionId, ItemEventRouterResponse output)
+    /// <summary>
+    /// Awaited rather than wrapped in <c>Task.FromResult</c>: the ping underneath is
+    /// genuinely async now, and it refunds money. Blocking on it here would put the
+    /// wait straight back where <see cref="SlotService.PingAsync"/> took it out of --
+    /// a pool thread parked on work that has to take the session's gate and finish a
+    /// profile save before it can return.
+    /// </summary>
+    public async Task<ItemEventRouterResponse> Sync(MongoId sessionId, ItemEventRouterResponse output)
     {
         log.Detail($"sync (item event) [{sessionId}]");
 
-        var response = service.Ping(sessionId, output);
+        var response = await service.PingAsync(sessionId, output);
 
         if (response.Note is not null)
         {
             log.Info(response.Note);
         }
 
-        return Task.FromResult(output);
+        return output;
     }
 }

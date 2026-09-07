@@ -1,4 +1,5 @@
 ﻿using Blackjack.Game;
+using Casino.Server;
 using SPTarkov.Server.Core.Models.Common;
 
 namespace Blackjack.Server.Tests;
@@ -7,6 +8,7 @@ public class WalletTests
 {
     private readonly MongoId _session = new();
     private readonly FakeBank _bank = new();
+    private readonly SessionGate _gate = new();
     private readonly FakeProfiles _profiles = new();
     private readonly FakeStats _stats = new();
     private readonly FakeEscrow _escrow = new();
@@ -18,7 +20,7 @@ public class WalletTests
             new Rules { MinBet = 1, MaxBet = int.MaxValue },
             Shoe.Stacked(cards.Split(' ').Select(Card.Parse))));
 
-        return new BlackjackService(_bank, _profiles, _tables, _stats, _escrow);
+        return new BlackjackService(_bank, _gate, _profiles, _tables, _stats, _escrow);
     }
 
     [Fact]
@@ -49,7 +51,7 @@ public class WalletTests
     /// resolved to a profile.
     /// </summary>
     [Fact]
-    public void ThePingReportsWhatTheTableWillTake()
+    public async Task ThePingReportsWhatTheTableWillTake()
     {
         var service = WithDeal("KS KH 9D 7C");
 
@@ -57,7 +59,7 @@ public class WalletTests
         {
             _profiles.Exists = known;
 
-            var ping = service.Ping(_session);
+            var ping = await service.Ping(_session);
 
             Assert.Equal(Enum.GetValues<Wallet>().Length, ping.Limits.Count);
 

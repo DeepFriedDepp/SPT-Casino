@@ -23,9 +23,9 @@ public class RouletteCallbacks(
 {
     private static int _limitsReported;
 
-    public ValueTask<string> Ping(PingRequest info, MongoId sessionId)
+    public async ValueTask<string> Ping(PingRequest info, MongoId sessionId)
     {
-        var response = service.Ping(sessionId);
+        var response = await service.Ping(sessionId);
 
         ReportStackLimitsOnce(response.HasProfile);
 
@@ -42,25 +42,30 @@ public class RouletteCallbacks(
             log.Error("no profile for that session. If the id above is blank, the session cookie did not resolve.");
         }
 
-        return new ValueTask<string>(httpResponseUtil.NoBody(response));
+        return httpResponseUtil.NoBody(response);
     }
 
-    public ValueTask<string> Place(PlaceRequest info, MongoId sessionId)
+    // Place, Remove and Clear await rather than wrapping a finished value, because the
+    // service now takes the session's gate before it touches the cloth. Blocking on
+    // that with `.Result` to keep the old signature would starve the very thread the
+    // gate holder needs to resume -- see Casino.Server.SessionGate.
+
+    public async ValueTask<string> Place(PlaceRequest info, MongoId sessionId)
     {
         Received("place", sessionId, $"{info.Amount:N0} on {info.Kind} {info.Selection}");
-        return new ValueTask<string>(Respond(service.Place(info, sessionId)));
+        return Respond(await service.Place(info, sessionId));
     }
 
-    public ValueTask<string> Remove(RemoveRequest info, MongoId sessionId)
+    public async ValueTask<string> Remove(RemoveRequest info, MongoId sessionId)
     {
         Received("remove", sessionId, $"{info.Amount:N0} off {info.Kind} {info.Selection}");
-        return new ValueTask<string>(Respond(service.Remove(info, sessionId)));
+        return Respond(await service.Remove(info, sessionId));
     }
 
-    public ValueTask<string> Clear(ClearRequest info, MongoId sessionId)
+    public async ValueTask<string> Clear(ClearRequest info, MongoId sessionId)
     {
         Received("clear", sessionId, null);
-        return new ValueTask<string>(Respond(service.Clear(sessionId)));
+        return Respond(await service.Clear(sessionId));
     }
 
     public async ValueTask<string> Spin(SpinRequest info, MongoId sessionId)

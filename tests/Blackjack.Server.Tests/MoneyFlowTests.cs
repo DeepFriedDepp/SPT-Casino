@@ -1,4 +1,5 @@
 ﻿using Blackjack.Game;
+using Casino.Server;
 using SPTarkov.Server.Core.Models.Common;
 
 namespace Blackjack.Server.Tests;
@@ -15,12 +16,13 @@ public class MoneyFlowTests
 
     private readonly MongoId _session = new();
     private readonly FakeBank _bank = new();
+    private readonly SessionGate _gate = new();
     private readonly FakeProfiles _profiles = new();
     private readonly TableStore _tables = new();
     private readonly FakeStats _stats = new();
     private readonly FakeEscrow _escrow = new();
 
-    private BlackjackService Service() => new(_bank, _profiles, _tables, _stats, _escrow);
+    private BlackjackService Service() => new(_bank, _gate, _profiles, _tables, _stats, _escrow);
 
     /// <summary>Installs a table dealing a known stack, then returns the service.</summary>
     private BlackjackService WithDeal(string cards, Rules? rules = null)
@@ -210,7 +212,7 @@ public class MoneyFlowTests
 
         Assert.False((await service.DealAsync(Bet(), _session)).Ok);
         Assert.False((await service.ActAsync(Act(PlayerAction.Hit), _session)).Ok);
-        Assert.False(service.State(_session).Ok);
+        Assert.False((await service.State(_session)).Ok);
         Assert.Empty(_bank.Debits);
     }
 

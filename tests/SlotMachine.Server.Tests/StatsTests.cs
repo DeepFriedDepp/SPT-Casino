@@ -113,7 +113,13 @@ public class StatsTests
         var stats = new FakeStats();
 
         var service = new SlotService(
-            bank, new FakeProfiles(), new FakeEscrow(), new FakeRandom(20260906), stats, new QuietLog());
+            bank,
+            new Casino.Server.SessionGate(),
+            new FakeProfiles(),
+            new FakeEscrow(),
+            new FakeRandom(20260906),
+            stats,
+            new QuietLog());
 
         Assert.Equal(0, stats.Saves);
 

@@ -1,4 +1,5 @@
 using Blackjack.Game;
+using Casino.Server;
 using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.ItemEvent;
 
@@ -14,6 +15,7 @@ public class ChangeRecordTests
 {
     private readonly MongoId _session = new();
     private readonly FakeBank _bank = new();
+    private readonly SessionGate _gate = new();
     private readonly FakeProfiles _profiles = new();
     private readonly FakeStats _stats = new();
     private readonly FakeEscrow _escrow = new();
@@ -25,7 +27,7 @@ public class ChangeRecordTests
             new Rules { MinBet = 1, MaxBet = int.MaxValue },
             Shoe.Stacked(cards.Split(' ').Select(Card.Parse))));
 
-        return new BlackjackService(_bank, _profiles, _tables, _stats, _escrow);
+        return new BlackjackService(_bank, _gate, _profiles, _tables, _stats, _escrow);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using Blackjack.Game;
+using Casino.Server;
 using SPTarkov.Server.Core.Models.Common;
 
 namespace Blackjack.Server.Tests;
@@ -9,6 +10,7 @@ public class StatsTests
 
     private readonly MongoId _session = new();
     private readonly FakeBank _bank = new();
+    private readonly SessionGate _gate = new();
     private readonly FakeProfiles _profiles = new();
     private readonly FakeStats _stats = new();
     private readonly FakeEscrow _escrow = new();
@@ -17,7 +19,7 @@ public class StatsTests
     private BlackjackService WithDeal(string cards)
     {
         _tables.Seed(_session, new BlackjackTable(new Rules(), Shoe.Stacked(cards.Split(' ').Select(Card.Parse))));
-        return new BlackjackService(_bank, _profiles, _tables, _stats, _escrow);
+        return new BlackjackService(_bank, _gate, _profiles, _tables, _stats, _escrow);
     }
 
     private static DealRequest Bet() => new() { Wager = Wager, Wallet = nameof(Wallet.Roubles) };
@@ -32,7 +34,7 @@ public class StatsTests
         await service.DealAsync(Bet(), _session);
         await service.ActAsync(Act(PlayerAction.Stand), _session);
 
-        var s = service.Stats(_session);
+        var s = await service.Stats(_session);
         Assert.Equal(1, s.RoundsPlayed);
         Assert.Equal(1, s.HandsPlayed);
         Assert.Equal(1, s.Wins);
@@ -52,7 +54,7 @@ public class StatsTests
         var service = WithDeal("AS 9H KH 7D");
         await service.DealAsync(Bet(), _session);
 
-        var s = service.Stats(_session);
+        var s = await service.Stats(_session);
         Assert.Equal(1, s.Blackjacks);
         Assert.Equal(1, s.Wins);
         Assert.Equal(15_000, s.ByCurrency[nameof(Wallet.Roubles)].BestRound);
@@ -65,7 +67,7 @@ public class StatsTests
         await service.DealAsync(Bet(), _session);
         await service.ActAsync(Act(PlayerAction.Hit), _session);
 
-        var s = service.Stats(_session);
+        var s = await service.Stats(_session);
         Assert.Equal(1, s.Busts);
         Assert.Equal(1, s.Losses);
         Assert.Equal(-1, s.CurrentStreak);
@@ -81,7 +83,7 @@ public class StatsTests
         await service.DealAsync(Bet(), _session);
         await service.ActAsync(Act(PlayerAction.Split), _session);
 
-        var s = service.Stats(_session);
+        var s = await service.Stats(_session);
         Assert.Equal(1, s.RoundsPlayed);
         Assert.Equal(2, s.HandsPlayed);
         Assert.Equal(1, s.Wins);
@@ -101,7 +103,7 @@ public class StatsTests
         await service.DealAsync(new DealRequest { Wager = 1_000, Wallet = nameof(Wallet.Dollars) }, _session);
         await service.ActAsync(Act(PlayerAction.Stand), _session);
 
-        var s = service.Stats(_session);
+        var s = await service.Stats(_session);
         Assert.True(s.ByCurrency.ContainsKey(nameof(Wallet.Dollars)));
         Assert.False(s.ByCurrency.ContainsKey(nameof(Wallet.Roubles)));
         Assert.Equal(1_000, s.ByCurrency[nameof(Wallet.Dollars)].Net);

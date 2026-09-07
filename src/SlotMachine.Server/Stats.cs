@@ -66,6 +66,42 @@ public class PlayerStats
     public Dictionary<string, SpinCurrencyStats> ByCurrency { get; set; } = [];
 
     /// <summary>
+    /// A detached copy, for a reader that will walk this outside the session's gate.
+    ///
+    /// <see cref="StatsStore.Get"/> hands out the live record, and the thing that reads
+    /// it is a JSON serialiser running in the HTTP layer -- long after the service
+    /// returned. Walking <see cref="ByCurrency"/> there while <see cref="Record"/> adds
+    /// a key to it throws <c>Collection was modified</c> onto the request thread, so the
+    /// walk is done here instead, where <see cref="SlotService"/> holds the session.
+    ///
+    /// Deep as far as it needs to be: <see cref="SpinCurrencyStats"/> is mutated in
+    /// place by <see cref="Record"/>, so copying the dictionary and sharing its values
+    /// would leave the reader looking at counters that still move.
+    /// </summary>
+    public PlayerStats Snapshot() => new()
+    {
+        PullsPlayed = PullsPlayed,
+        Wins = Wins,
+        Losses = Losses,
+        Jackpots = Jackpots,
+        BestMultiple = BestMultiple,
+        CurrentStreak = CurrentStreak,
+        BestStreak = BestStreak,
+        FirstPlayedUtc = FirstPlayedUtc,
+        LastPlayedUtc = LastPlayedUtc,
+        ByCurrency = ByCurrency.ToDictionary(
+            entry => entry.Key,
+            entry => new SpinCurrencyStats
+            {
+                PullsPlayed = entry.Value.PullsPlayed,
+                Wagered = entry.Value.Wagered,
+                Returned = entry.Value.Returned,
+                BestPull = entry.Value.BestPull,
+                WorstPull = entry.Value.WorstPull,
+            }),
+    };
+
+    /// <summary>
     /// Folds one settled pull in. Pure and self-contained, so the whole of the
     /// accounting is testable without touching a file or a server -- the shape this
     /// was built to match is Blackjack.Server's own PlayerStats.Record.

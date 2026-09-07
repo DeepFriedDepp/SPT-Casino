@@ -48,9 +48,9 @@ public class MoneyInvariantTests
 
         for (var round = 0; round < 40; round++)
         {
-            Place(service, "Straight", round % 37, 10_000);
-            Place(service, "Red", 0, 20_000);
-            Place(service, "Dozen", 1 + (round % 3), 30_000);
+            await Place(service, "Straight", round % 37, 10_000);
+            await Place(service, "Red", 0, 20_000);
+            await Place(service, "Dozen", 1 + (round % 3), 30_000);
 
             var spin = await service.SpinAsync(Session, Output());
             var last = spin.Table!.Last!;
@@ -71,16 +71,16 @@ public class MoneyInvariantTests
     /// which is what makes a right-click free and a cleared cloth cost nothing.
     /// </summary>
     [Fact]
-    public void PlacingAndLiftingChipsMoveNoMoney()
+    public async Task PlacingAndLiftingChipsMoveNoMoney()
     {
         var (service, bank, _, escrow) = Table();
         bank.Seed(Wallet.Roubles, Rich);
 
-        Place(service, "Straight", 7, 100_000);
-        Place(service, "Straight", 7, 100_000);
-        Place(service, "Red", 0, 50_000);
-        service.Remove(new RemoveRequest { Kind = "Straight", Selection = 7, Amount = 100_000 }, Session);
-        service.Clear(Session);
+        await Place(service, "Straight", 7, 100_000);
+        await Place(service, "Straight", 7, 100_000);
+        await Place(service, "Red", 0, 50_000);
+        await service.Remove(new RemoveRequest { Kind = "Straight", Selection = 7, Amount = 100_000 }, Session);
+        await service.Clear(Session);
 
         Assert.Empty(bank.Movements);
         Assert.Equal(0, bank.Debits);
@@ -95,7 +95,7 @@ public class MoneyInvariantTests
         var (service, bank, _, _) = Table();
         bank.Seed(Wallet.Roubles, Rich);
 
-        Place(service, "Straight", 17, 50_000);
+        await Place(service, "Straight", 17, 50_000);
         var spin = await service.SpinAsync(Session, Output());
 
         Assert.Equal(1, bank.Debits);
@@ -116,7 +116,7 @@ public class MoneyInvariantTests
         var (service, bank, _, _) = Table();
         bank.Seed(Wallet.Roubles, Rich);
 
-        Place(service, "Straight", 17, 50_000);
+        await Place(service, "Straight", 17, 50_000);
         await service.SpinAsync(Session, Output());
 
         var moves = bank.Movements.Count;
@@ -142,7 +142,7 @@ public class MoneyInvariantTests
         var (service, bank, _, escrow) = Table();
         bank.Seed(Wallet.Roubles, 80_000);
 
-        Place(service, "Straight", 7, 50_000);
+        await Place(service, "Straight", 7, 50_000);
 
         // Spent elsewhere between laying the chips down and spinning.
         bank.Seed(Wallet.Roubles, 30_000);
@@ -164,14 +164,14 @@ public class MoneyInvariantTests
     /// correct and horrible. It is a read: nothing moves either way.
     /// </summary>
     [Fact]
-    public void AChipTheWalletCannotCoverIsRefusedWhenItIsPlaced()
+    public async Task AChipTheWalletCannotCoverIsRefusedWhenItIsPlaced()
     {
         var (service, bank, _, _) = Table();
         bank.Seed(Wallet.Roubles, 60_000);
 
-        Place(service, "Straight", 7, 50_000);
+        await Place(service, "Straight", 7, 50_000);
 
-        var refused = service.Place(
+        var refused = await service.Place(
             new PlaceRequest { Kind = "Black", Selection = 0, Amount = 50_000 }, Session);
 
         Assert.False(refused.Ok);
@@ -215,8 +215,8 @@ public class MoneyInvariantTests
         var (service, bank, _, escrow) = Table();
         bank.Seed(Wallet.Roubles, Rich);
 
-        Place(service, "Straight", 7, 40_000);
-        Place(service, "Black", 0, 20_000);
+        await Place(service, "Straight", 7, 40_000);
+        await Place(service, "Black", 0, 20_000);
         await service.SpinAsync(Session, Output());
 
         Assert.Equal([60_000], escrow.Recorded);
@@ -241,7 +241,7 @@ public class MoneyInvariantTests
 
         for (var attempt = 0; attempt < 200 && !lost; attempt++)
         {
-            Place(service, "Straight", 7, 10_000);
+            await Place(service, "Straight", 7, 10_000);
             var spin = await service.SpinAsync(Session, Output());
             lost = spin.Table!.Last!.Returned == 0;
             await service.SpinAsync(Session, Output());
@@ -284,7 +284,7 @@ public class MoneyInvariantTests
         var (service, bank, profiles, _) = Table();
         bank.Seed(Wallet.Roubles, Rich);
 
-        Place(service, "Straight", 7, 10_000);
+        await Place(service, "Straight", 7, 10_000);
         await service.SpinAsync(Session, Output());
 
         Assert.True(profiles.Saves >= 1, "a spin moved money and never saved it.");
@@ -300,7 +300,7 @@ public class MoneyInvariantTests
         var (service, bank, _, escrow) = Table();
         bank.Seed(Wallet.Roubles, Rich);
 
-        Place(service, "Straight", 7, 10_000);
+        await Place(service, "Straight", 7, 10_000);
         await service.SpinAsync(Session, Output());
 
         var moves = bank.Movements.Count;
@@ -320,7 +320,7 @@ public class MoneyInvariantTests
         var (service, bank, _, _) = Table();
         bank.Seed(Wallet.Roubles, Rich);
 
-        Place(service, "Straight", 7, 250_000);
+        await Place(service, "Straight", 7, 250_000);
         await service.LeaveAsync(Session, Output());
 
         Assert.Empty(bank.Movements);
@@ -336,14 +336,25 @@ public class MoneyInvariantTests
         var escrow = new FakeEscrow();
 
         var service = new RouletteService(
-            bank, profiles, escrow, new TableStore(), new FakeRandom(20260905), new QuietLog());
+            bank,
+            new Casino.Server.SessionGate(),
+            profiles,
+            escrow,
+            new TableStore(),
+            new FakeRandom(20260905),
+            new QuietLog());
 
         return (service, bank, profiles, escrow);
     }
 
-    private static void Place(RouletteService service, string kind, int selection, int amount)
+    /// <summary>
+    /// Awaited because placing a chip takes the session's gate, which is async. The
+    /// cloth is a plain list read by the spin, so a chip going down is inside the
+    /// exclusion whether or not it moves money -- see <see cref="ConcurrencyTests"/>.
+    /// </summary>
+    private static async Task Place(RouletteService service, string kind, int selection, int amount)
     {
-        var reply = service.Place(
+        var reply = await service.Place(
             new PlaceRequest { Kind = kind, Selection = selection, Amount = amount }, Session);
 
         Assert.True(reply.Ok, reply.Error);

@@ -43,25 +43,24 @@ public class PokerItemEventCallbacks(PokerService service, IPokerLog log)
         return Attach(output, await service.SitAsync(request, sessionId, output));
     }
 
-    public ValueTask<ItemEventRouterResponse> Deal(
+    public async ValueTask<ItemEventRouterResponse> Deal(
         PokerDealAction body,
         MongoId sessionId,
         ItemEventRouterResponse output)
     {
         log.Detail($"-> deal (item event) [{sessionId}]");
 
-        return new ValueTask<ItemEventRouterResponse>(Attach(output, service.Deal(sessionId)));
+        return Attach(output, await service.Deal(sessionId));
     }
 
-    public ValueTask<ItemEventRouterResponse> Act(
+    public async ValueTask<ItemEventRouterResponse> Act(
         PokerActAction body,
         MongoId sessionId,
         ItemEventRouterResponse output)
     {
         log.Detail($"-> act (item event) [{sessionId}] {body.Move}");
 
-        return new ValueTask<ItemEventRouterResponse>(
-            Attach(output, service.Act(new ActRequest { Move = body.Move, To = body.To }, sessionId)));
+        return Attach(output, await service.Act(new ActRequest { Move = body.Move, To = body.To }, sessionId));
     }
 
     public async ValueTask<ItemEventRouterResponse> Leave(

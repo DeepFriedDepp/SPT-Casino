@@ -23,9 +23,9 @@ public class PokerCallbacks(
 {
     private static int _limitsReported;
 
-    public ValueTask<string> Ping(PingRequest info, MongoId sessionId)
+    public async ValueTask<string> Ping(PingRequest info, MongoId sessionId)
     {
-        var response = service.Ping(sessionId);
+        var response = await service.Ping(sessionId);
 
         ReportStackLimitsOnce(response.HasProfile);
 
@@ -42,7 +42,7 @@ public class PokerCallbacks(
             log.Error("no profile for that session. If the id above is blank, the session cookie did not resolve.");
         }
 
-        return new ValueTask<string>(httpResponseUtil.NoBody(response));
+        return httpResponseUtil.NoBody(response);
     }
 
     public async ValueTask<string> Sit(SitRequest info, MongoId sessionId)
@@ -51,16 +51,16 @@ public class PokerCallbacks(
         return Respond(await service.SitAsync(info, sessionId, Output(sessionId)));
     }
 
-    public ValueTask<string> Deal(DealRequest info, MongoId sessionId)
+    public async ValueTask<string> Deal(DealRequest info, MongoId sessionId)
     {
         Received("deal", sessionId, null);
-        return new ValueTask<string>(Respond(service.Deal(sessionId)));
+        return Respond(await service.Deal(sessionId));
     }
 
-    public ValueTask<string> Act(ActRequest info, MongoId sessionId)
+    public async ValueTask<string> Act(ActRequest info, MongoId sessionId)
     {
         Received("act", sessionId, $"{info.Move}{(info.To > 0 ? $" to {info.To}" : string.Empty)}");
-        return new ValueTask<string>(Respond(service.Act(info, sessionId)));
+        return Respond(await service.Act(info, sessionId));
     }
 
     public async ValueTask<string> State(StateRequest info, MongoId sessionId)

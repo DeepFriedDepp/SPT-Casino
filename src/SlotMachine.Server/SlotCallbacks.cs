@@ -20,9 +20,9 @@ public class SlotCallbacks(
     EventOutputHolder eventOutputHolder,
     SlotLog log)
 {
-    public ValueTask<string> Ping(PingRequest info, MongoId sessionId)
+    public async ValueTask<string> Ping(PingRequest info, MongoId sessionId)
     {
-        var response = service.Ping(sessionId, Output(sessionId));
+        var response = await service.PingAsync(sessionId, Output(sessionId));
 
         log.Info(
             $"ping from session '{response.SessionId}' -- profile {(response.HasProfile ? "found" : "NOT FOUND")}"
@@ -35,7 +35,7 @@ public class SlotCallbacks(
             log.Error("no profile for that session. If the id above is blank, the session cookie did not resolve.");
         }
 
-        return new ValueTask<string>(httpResponseUtil.NoBody(response));
+        return httpResponseUtil.NoBody(response);
     }
 
     public async ValueTask<string> Pull(PullRequest info, MongoId sessionId)
@@ -56,11 +56,17 @@ public class SlotCallbacks(
     /// The lifetime record. Unlike Ping and Pull this comes back as the stats object
     /// itself rather than wrapped in a response, because nothing about it can fail
     /// in a way the player needs telling about.
+    ///
+    /// The serialisation below is exactly the walk that used to throw: it happens out
+    /// here, after the session's gate has been given up. What it is handed is a copy
+    /// taken under that gate rather than the live record. See
+    /// <see cref="PlayerStats.Snapshot"/>.
     /// </summary>
-    public ValueTask<string> Stats(StatsRequest info, MongoId sessionId)
+    public async ValueTask<string> Stats(StatsRequest info, MongoId sessionId)
     {
         log.Detail($"stats [{sessionId}]");
-        return new ValueTask<string>(httpResponseUtil.NoBody(service.Stats(sessionId)));
+
+        return httpResponseUtil.NoBody(await service.Stats(sessionId));
     }
 
     /// <summary>

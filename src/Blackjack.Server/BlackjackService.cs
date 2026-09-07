@@ -16,18 +16,53 @@ namespace Blackjack.Server;
 [Injectable]
 public class BlackjackService(
     IBank bank,
+    Casino.Server.SessionGate gate,
     IProfileGateway profiles,
     TableStore tables,
     IStatsStore stats,
     IEscrowStore escrow)
 {
+    // ---- the gated entrance --------------------------------------------------------
+    //
+    // Every public method takes the player's gate and then calls an ungated `*Core`.
+    // That split is not style: SessionGate is NOT reentrant, so a public method calling
+    // another public method for the same session would deadlock against itself until
+    // the 30-second timeout fired.
+    //
+    // **Blackjack has three convenience overloads and they are the trap here.**
+    // `DealAsync`, `ActAsync` and `State` each come in a two-argument test/curl form
+    // that used to delegate to the fuller three-argument one. Gating both halves of
+    // such a pair is a guaranteed self-deadlock on the money path: the outer takes the
+    // session's only permit and the inner then queues for it. So both overloads are
+    // now thin gated wrappers over one shared ungated core, and the delegation between
+    // them is gone. Chosen over "the short overload calls the long one's core
+    // ungated" because that leaves a public entry point moving money outside the gate
+    // -- and it is the one every test in this suite uses, so it would be the one
+    // proved least.
+    //
+    // Stats and Ping are gated too, though they move no money. `bank.GetBalance` LINQ-
+    // walks `pmcData.Inventory.Items` while a debit inside the gate is structurally
+    // modifying that same list, and enumerating a List<T> under modification throws
+    // `InvalidOperationException: Collection was modified` straight out of the request
+    // thread; `StatsStore.Get` hands out the live `PlayerStats`, so the JSON serialiser
+    // walks `ByCurrency` while a settle is adding a key to it. A read of state being
+    // mutated is not a safe read. Neither can deadlock: they move no money and call
+    // nothing gated.
+    //
+    // Ping, Stats and State became async here purely because acquiring the gate is
+    // async. Nothing about their work changed.
+
     /// <summary>
     /// Test-only convenience. The throwaway response it builds is not initialised the
     /// way SPT's inventory helpers expect, so anything with a real InventoryHelper
     /// behind it must call the overload below with an EventOutputHolder response.
     /// </summary>
-    public Task<BlackjackResponse> DealAsync(DealRequest request, MongoId sessionId) =>
-        DealAsync(request, sessionId, new ItemEventRouterResponse());
+    public async Task<BlackjackResponse> DealAsync(DealRequest request, MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await DealCoreAsync(request, sessionId, new ItemEventRouterResponse());
+    }
 
     /// <summary>
     /// <paramref name="output"/> accumulates the inventory changes. The item-event
@@ -36,6 +71,66 @@ public class BlackjackService(
     /// a stale stash in game.
     /// </summary>
     public async Task<BlackjackResponse> DealAsync(
+        DealRequest request,
+        MongoId sessionId,
+        ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await DealCoreAsync(request, sessionId, output);
+    }
+
+    public async Task<BlackjackResponse> ActAsync(ActionRequest request, MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await ActCoreAsync(request, sessionId, new ItemEventRouterResponse());
+    }
+
+    public async Task<BlackjackResponse> ActAsync(
+        ActionRequest request,
+        MongoId sessionId,
+        ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return await ActCoreAsync(request, sessionId, output);
+    }
+
+    /// <summary>Lifetime record. See <see cref="StatsCore"/>.</summary>
+    public async Task<PlayerStats> Stats(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return StatsCore(sessionId);
+    }
+
+    /// <summary>Cheap health check. Touches no money and starts no round.</summary>
+    public async Task<PingResponse> Ping(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return PingCore(sessionId);
+    }
+
+    /// <summary>Test-only convenience -- see <see cref="DealAsync(DealRequest, MongoId)"/>.</summary>
+    public async Task<BlackjackResponse> State(MongoId sessionId)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return StateCore(sessionId, new ItemEventRouterResponse());
+    }
+
+    public async Task<BlackjackResponse> State(MongoId sessionId, ItemEventRouterResponse output)
+    {
+        using var _ = await gate.EnterAsync(sessionId);
+
+        return StateCore(sessionId, output);
+    }
+
+    // ---- the ungated work ----------------------------------------------------------
+
+    private async Task<BlackjackResponse> DealCoreAsync(
         DealRequest request,
         MongoId sessionId,
         ItemEventRouterResponse output)
@@ -94,10 +189,7 @@ public class BlackjackService(
         return Success(view, sessionId, session) with { Note = refund };
     }
 
-    public Task<BlackjackResponse> ActAsync(ActionRequest request, MongoId sessionId) =>
-        ActAsync(request, sessionId, new ItemEventRouterResponse());
-
-    public async Task<BlackjackResponse> ActAsync(
+    private async Task<BlackjackResponse> ActCoreAsync(
         ActionRequest request,
         MongoId sessionId,
         ItemEventRouterResponse output)
@@ -173,10 +265,9 @@ public class BlackjackService(
         return Success(view, sessionId, session) with { Warning = warning };
     }
 
-    public PlayerStats Stats(MongoId sessionId) => stats.Get(sessionId);
+    private PlayerStats StatsCore(MongoId sessionId) => stats.Get(sessionId);
 
-    /// <summary>Cheap health check. Touches no money and starts no round.</summary>
-    public PingResponse Ping(MongoId sessionId)
+    private PingResponse PingCore(MongoId sessionId)
     {
         var known = profiles.HasProfile(sessionId);
 
@@ -199,10 +290,7 @@ public class BlackjackService(
         };
     }
 
-    /// <summary>Test-only convenience -- see <see cref="DealAsync(DealRequest, MongoId)"/>.</summary>
-    public BlackjackResponse State(MongoId sessionId) => State(sessionId, new ItemEventRouterResponse());
-
-    public BlackjackResponse State(MongoId sessionId, ItemEventRouterResponse output)
+    private BlackjackResponse StateCore(MongoId sessionId, ItemEventRouterResponse output)
     {
         if (!profiles.HasProfile(sessionId))
         {
