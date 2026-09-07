@@ -210,7 +210,20 @@ public sealed class HoldemTable
 
     public IReadOnlyList<HoldemSeat> Seats => _seats;
 
-    public HoldemSeat Player => _seats[PlayerSeatIndex];
+    /// <summary>
+    /// The one person at the table.
+    ///
+    /// Refuses to answer once there is more than one, or when the single person is not
+    /// at <see cref="PlayerSeatIndex"/>. Returning seat 0 regardless would be the
+    /// dangerous reading: every caller of this asks about somebody's chips, and paying
+    /// seat 0's stack to whoever happened to ask is a money bug that no test of a
+    /// one-human table can see.
+    /// </summary>
+    public HoldemSeat Player => _humans is [PlayerSeatIndex]
+        ? _seats[PlayerSeatIndex]
+        : throw new InvalidOperationException(
+            $"This table seats people at {string.Join(", ", _humans)}, so \"the player\" is ambiguous. "
+            + "Ask about a seat: Seats[index], IsTurnFor(index), Act(index, decision).");
 
     /// <summary>The board, as far as it has been turned over.</summary>
     public IReadOnlyList<Card> Community => _community.Take(_revealed).ToList();
@@ -224,8 +237,33 @@ public sealed class HoldemTable
     public HoldemSeat? Actor =>
         _actor >= 0 && Street is not (HoldemStreet.Idle or HoldemStreet.Showdown) ? _seats[_actor] : null;
 
-    /// <summary>True when the table is waiting on the person at the keyboard.</summary>
+    /// <summary>
+    /// True when the table is waiting on a person rather than on a bot.
+    ///
+    /// Unchanged, and on a one-human table it still means "waiting on you" -- which is
+    /// what the console's and the server's loops read it as. With two people seated it
+    /// can only mean "waiting on one of them", so it is no longer enough on its own:
+    /// use <see cref="IsTurnFor"/> to ask about a seat.
+    /// </summary>
     public bool AwaitingPlayer => Actor?.IsPlayer == true;
+
+    /// <summary>The seat to act, or null when nothing is waiting on a decision.</summary>
+    public int? ActorSeat => Actor?.Index;
+
+    /// <summary>
+    /// True when this seat is the one the table is waiting on.
+    ///
+    /// The question a client actually has, and the only one that stays answerable with
+    /// two people at the table. An index off the table throws rather than answering
+    /// false: a seat that is never anybody's turn is indistinguishable from a seat
+    /// that is merely waiting, and the caller would sit forever.
+    /// </summary>
+    public bool IsTurnFor(int seatIndex)
+    {
+        RequireSeat(seatIndex);
+
+        return Actor?.Index == seatIndex;
+    }
 
     /// <summary>Total chips at the table. Constant across a hand -- see the tests.</summary>
     public int ChipsInPlay => _seats.Sum(seat => seat.Stack) + Pot;
@@ -273,7 +311,17 @@ public sealed class HoldemTable
             _log.Write(
                 $"hand: button on {_seats[_button].Name}, blinds {_rules.SmallBlind}/{_rules.BigBlind}, "
                 + $"{_seats.Count} seats, {ChipsInPlay} chips in play");
-            _log.Write($"hand: {Player.Name} holds {string.Join(' ', Player.Cards)}");
+            // Every person's holding, not "the player's" -- Player refuses to answer
+            // once two of them are seated, and a table that could not write its own log
+            // line would be a strange way to find that out.
+            //
+            // This sink is the server's or the terminal's, one per table, and it must
+            // stay that way: piping it to a client would hand one person the other's
+            // hole cards, which is exactly what the per-viewer view exists to prevent.
+            foreach (var seat in _seats.Where(seat => seat.IsPlayer))
+            {
+                _log.Write($"hand: {seat.Name} holds {string.Join(' ', seat.Cards)}");
+            }
         }
 
         Run();
@@ -312,7 +360,7 @@ public sealed class HoldemTable
 
         if (replacement is not null && seat.IsPlayer)
         {
-            throw new InvalidOperationException("The player's seat cannot be handed to an agent.");
+            throw new InvalidOperationException($"{seat.Name}'s seat is a person's and cannot be handed to an agent.");
         }
 
         var replaced = _seats[seatIndex] = new HoldemSeat(seatIndex, seat.IsPlayer, name ?? seat.Name, chips);
@@ -366,19 +414,55 @@ public sealed class HoldemTable
         SeatsToActAfter(seat),
         _rules);
 
-    /// <summary>The player's decision. Bots then act until it is the player's turn again.</summary>
-    public void Act(HoldemDecision decision)
+    /// <summary>
+    /// The player's decision. Bots then act until it is the player's turn again.
+    ///
+    /// The one-human shorthand, and it goes through <see cref="Player"/> on purpose:
+    /// on a table with two people at it this throws rather than acting for whichever
+    /// of them is up. Letting it guess would let one person fold the other's hand,
+    /// which is the worst bug this file could grow.
+    /// </summary>
+    public void Act(HoldemDecision decision) => Act(Player.Index, decision);
+
+    /// <summary>
+    /// One named seat's decision. Bots then act until a person is up again.
+    ///
+    /// The seat is passed in rather than read off whose turn it is, because inferring
+    /// it means a client whose action arrives a moment late acts for whoever the table
+    /// has moved on to. Refusing the stale action is the entire point of the argument.
+    /// </summary>
+    public void Act(int seatIndex, HoldemDecision decision)
     {
+        RequireSeat(seatIndex);
+
         var seat = Actor ?? throw new InvalidOperationException($"Nothing to decide while the table is {Street}.");
+
+        if (seat.Index != seatIndex)
+        {
+            // Named by number as well as by name: with two people seated both are
+            // called "You" unless the caller named them, and "It is You's turn, not
+            // You's" helps nobody.
+            throw new InvalidOperationException(
+                $"It is seat {seat.Index}'s turn ({seat.Name}), not seat {seatIndex}'s.");
+        }
 
         if (!seat.IsPlayer)
         {
-            throw new InvalidOperationException($"It is {seat.Name}'s turn, not yours.");
+            throw new InvalidOperationException($"{seat.Name} is a bot and decides for itself.");
         }
 
         Apply(seat, decision, OptionsFor(seat));
         AdvanceActor();
         Run();
+    }
+
+    private void RequireSeat(int seatIndex)
+    {
+        if (seatIndex < 0 || seatIndex >= _seats.Count)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(seatIndex), seatIndex, $"This table has seats 0 to {_seats.Count - 1}.");
+        }
     }
 
     private int FirstToActPreFlop

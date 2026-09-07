@@ -146,6 +146,22 @@
       <HintPath>$(GameManaged)\Newtonsoft.Json.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!--
+      For the push channel in CasinoSocketClient.cs.
+
+      It comes from the game's Managed folder like every other reference here, and not
+      from NuGet, which matters: the game already loads this exact assembly, so a NuGet
+      copy would be a second websocket-sharp in the process with different types of the
+      same name. Private is false for the same reason it is false everywhere else in
+      this file: shipping a copy next to the plugin is how that second one happens.
+
+      (XML comments cannot contain a double hyphen, so this block does not use the house
+      dash. That has broken a build in this repo more than once.)
+    -->
+    <Reference Include="websocket-sharp">
+      <HintPath>$(GameManaged)\websocket-sharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="spt-common">
       <HintPath>$(SptPlugins)\spt-common.dll</HintPath>
       <Private>false</Private>

@@ -8,9 +8,9 @@ namespace Poker.Game;
 /// sized against, what an all-in means, and what decides which side pot a seat is
 /// eligible for. Nothing about hold'em can be settled without it.
 ///
-/// Seat 0 is the player and the rest are bots, but the table treats them
+/// Some seats hold people and the rest hold bots, but the table treats them
 /// identically -- the only difference is where the decision comes from. Bot chips
-/// are notional and never reach a profile; the player's are real currency, converted
+/// are notional and never reach a profile; a person's are real currency, converted
 /// at the buy-in.
 /// </summary>
 public sealed class HoldemSeat
@@ -27,7 +27,13 @@ public sealed class HoldemSeat
 
     public int Index { get; }
 
-    /// <summary>True for the one seat whose decisions arrive from outside the engine.</summary>
+    /// <summary>
+    /// True for a seat whose decisions arrive from outside the engine.
+    ///
+    /// Says "a person sits here", not "this is you" -- with two people at the table it
+    /// is true of both, so a client works out which one it is from
+    /// <see cref="HoldemView.ViewerSeat"/> instead.
+    /// </summary>
     public bool IsPlayer { get; }
 
     public string Name { get; }
