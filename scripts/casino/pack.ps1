@@ -138,9 +138,6 @@ if ($Zip) {
     $releases = Join-Path $root 'releases\casino'
     New-Item -ItemType Directory -Force -Path $releases | Out-Null
 
-    $archive = Join-Path $releases "SPT_CasinoV$release.zip"
-    if (Test-Path $archive) { Remove-Item $archive -Force }
-
     # Entries are written one at a time, with forward slashes, deliberately.
     #
     # Compress-Archive writes backslash entry names, which extract on Linux as a single
@@ -151,25 +148,54 @@ if ($Zip) {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-    $zipFile = [System.IO.Compression.ZipFile]::Open($archive, 'Create')
-    try {
-        foreach ($file in Get-ChildItem $stage -Recurse -File) {
-            $relative = $file.FullName.Substring($stage.Length).TrimStart([char]92, [char]47)
-            $relative = $relative.Replace([char]92, [char]47)
+    function Write-Archive {
+        param([string]$Path, [System.IO.FileInfo[]]$Files, [string]$Stage)
 
-            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-                $zipFile, $file.FullName, $relative) | Out-Null
+        if (Test-Path $Path) { Remove-Item $Path -Force }
+
+        $zipFile = [System.IO.Compression.ZipFile]::Open($Path, 'Create')
+        try {
+            foreach ($file in $Files) {
+                $relative = $file.FullName.Substring($Stage.Length).TrimStart([char]92, [char]47)
+                $relative = $relative.Replace([char]92, [char]47)
+
+                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                    $zipFile, $file.FullName, $relative) | Out-Null
+            }
         }
-    }
-    finally {
-        $zipFile.Dispose()
+        finally {
+            $zipFile.Dispose()
+        }
+
+        $mb = (Get-Item $Path).Length / 1MB
+        Write-Host ("Packed {0} ({1:N1} MB)" -f $Path, $mb) -ForegroundColor Green
     }
 
-    $mb = (Get-Item $archive).Length / 1MB
-    Write-Host ("Packed {0} ({1:N1} MB)" -f $archive, $mb) -ForegroundColor Green
+    $staged = Get-ChildItem $stage -Recurse -File
 
-    # No README at the top of the zip, decided for Blackjack 1.1.2 and kept: this is
-    # extracted *over* an SPT folder, so a loose file at its root lands in the install
+    # The whole thing, for a machine that plays: both halves.
+    Write-Archive -Path (Join-Path $releases "SPT_CasinoV$release.zip") -Files $staged -Stage $stage
+
+    # The server half on its own, following the precedent set by
+    # releases/roulette/Roulette-0.1.0-SPT4.1-server-only.zip.
+    #
+    # Worth having because the machine that HOSTS is often not a machine that plays. On
+    # a headless or dedicated server the BepInEx plugin is not merely unnecessary, it is
+    # actively confusing later: a plugin folder sitting in an install with no game
+    # attached is the kind of thing somebody eventually "fixes" by deleting the wrong
+    # half. Under Fika this is the common case -- every player needs the client half on
+    # their own machine, and only one machine needs this one.
+    $serverFiles = $staged | Where-Object {
+        $_.FullName.Substring($stage.Length).TrimStart([char]92, [char]47).StartsWith($serverRoot)
+    }
+
+    Write-Archive `
+        -Path (Join-Path $releases "SPT_CasinoV$release-server-only.zip") `
+        -Files $serverFiles `
+        -Stage $stage
+
+    # No README at the top of either zip, decided for Blackjack 1.1.2 and kept: these are
+    # extracted *over* an SPT folder, so a loose file at the root lands in the install
     # root beside the game's own, where it is litter rather than documentation.
 }
 

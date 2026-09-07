@@ -9,15 +9,46 @@ folder the server half unpacks into, so they are not interchangeable.
 
 ## Installing
 
-Extract over your SPT folder -- the one holding `SPT\` and `EscapeFromTarkov.exe`. The
-server half lands in `SPT\user\mods\Casino`, beside your other server mods.
+There are two downloads because there are two halves, and under Fika they go to
+different machines.
 
-You should see a `[Casino] client loaded` line in `BepInEx/LogOutput.log` and one
-`[Casino]` line in the server console.
+| Download | Contains | Goes on |
+| --- | --- | --- |
+| `SPT_CasinoV1.1.0-SPT4.0.13.zip` | both halves | any machine that **plays** |
+| `SPT_CasinoV1.1.0-SPT4.0.13-server-only.zip` | the server half only | the machine that **hosts** |
+
+**Every player needs the client half on their own machine.** The tab, the lobby and all
+four tables are drawn locally; a player without it sees no casino no matter what the
+server is running. **Only the hosting machine needs the server half** -- that is where
+the money actually moves and where the escrow files live.
+
+If the host also plays, use the full zip there and ignore the server-only one.
+
+Either way, extract **over your SPT folder** -- the one holding `SPT\` and
+`EscapeFromTarkov.exe`, not into `SPT\` itself. The server half lands in
+`SPT\user\mods\Casino`, beside your other server mods.
+
+Everyone must be on the **same version**. The client and server talk over routes that
+changed in this build.
+
+### Checking it worked
+
+- Client: a `[Casino] client loaded` line in `BepInEx/LogOutput.log`.
+- Server: one `[Casino]` line in the server console at startup.
 
 **If it fails, it fails loudly.** A mod built for the wrong SPT dies on an unhandled
 throw during mod validation and takes the other server mods down with it, so a wall of
-red naming a version is the version gate; silence is something else.
+red naming a version is the version gate. Silence is something else -- most likely the
+server half landed in a folder SPT does not read, which is what to check first if the
+tab appears but nothing responds.
+
+### If you are upgrading
+
+Remove any separately-installed Blackjack, Poker or Roulette first. They are all part of
+this now, and leaving them gives you a tab each on the bar plus several copies of the
+same key handler fighting over the escape key. Running `scripts/casino/pack.ps1
+-InstallPath <your SPT>` does this for you, moving them aside rather than deleting them --
+they hold the record of money the house owes anyone whose hand was interrupted.
 
 ## What changed from the 4.1.x build
 
