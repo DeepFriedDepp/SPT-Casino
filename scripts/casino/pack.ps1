@@ -40,7 +40,14 @@ $version = '1.1.0'
 # What the download is called. Deliberately not $version: the plugin carries a
 # three-part version because BepInEx expects one, and the release is named the way it
 # is published.
-$release = '1.1.0'
+#
+# The SPT line is IN THE NAME, following the convention the per-table releases already
+# use -- Poker-1.0.0-SPT4.1.zip, Roulette-0.1.0-SPT4.1.zip. It has to be, because
+# upstream's SPT_CasinoV1.1.0.zip is the SAME mod version built for 4.1.x, and the two
+# archives are not interchangeable: they differ in target framework, in the SptVersion
+# gate, and in which folder the server half unpacks into. One name over two builds is
+# how somebody ends up with a mod that loads and answers nothing.
+$release = '1.1.0-SPT4.0.13'
 $tables = @('Blackjack', 'Poker', 'Roulette', 'SlotMachine')
 
 # Where SPT keeps its server mods, RELATIVE TO THE INSTALL ROOT.
