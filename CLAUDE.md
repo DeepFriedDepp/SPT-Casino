@@ -264,6 +264,23 @@ reads `Wallet` to pick the currency, so a torn row could refund roubles as dolla
 four stores now publish a fresh `OutstandingStake`/`OutstandingStack` from the
 `AddOrUpdate` delegate.
 
+## The two remotes, and which one you may push to
+
+```
+origin    https://github.com/DeepFriedDepp/SPT-Casino.git   fetch + push
+upstream  https://github.com/JoelHauser/SPT-Casino.git      FETCH ONLY
+```
+
+**`origin` is this fork and is the only thing anything is ever pushed to.** `upstream` is
+the mod this was forked from, kept as a remote so its fixes can be read and backported --
+see `docs/memory/2026-09-11-backport-from-upstream.md`, which also explains why nothing
+there cherry-picks.
+
+Its push URL is deliberately set to a string that is not a repository, so `git push
+upstream` fails with "does not appear to be a git repository" rather than doing anything.
+Leave it that way. Restoring it buys nothing -- we have no write access there, and a
+contribution goes as a pull request from `origin`.
+
 ## Publishing
 
 **SPT Casino registers as `com.mybutthasarash.sptcasino`, and only the main file has

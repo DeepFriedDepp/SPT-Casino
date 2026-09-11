@@ -456,6 +456,21 @@ namespace Blackjack.Client
             if (shared != null)
             {
                 _yourSeat = response["YourSeat"]?.ToObject<int?>() ?? _yourSeat;
+
+                // **A shared table has one currency, and it is the table's, not this
+                // panel's.** The wallet chips are the solo table's control and they follow
+                // the player from it -- so somebody who last played dollars alone would
+                // sit down at a rouble table with DOLLARS still lit, press BET, and watch
+                // roubles leave. The server refuses that now, but being refused for
+                // pressing the button the panel was showing is not much better than being
+                // charged for it. Adopting the table's wallet means the question never
+                // arises.
+                var theirs = (string)response["Wallet"];
+
+                if (!string.IsNullOrEmpty(theirs) && theirs != _wallet)
+                {
+                    ChooseWallet(theirs);
+                }
             }
 
             if (!ok && !string.IsNullOrEmpty(error))

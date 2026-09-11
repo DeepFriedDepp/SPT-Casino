@@ -81,6 +81,28 @@ internal sealed class FakeBank : IBank
     internal bool RefuseDebits { get; set; }
 
     /// <summary>
+    /// Which response each credit was handed, and whose money it was.
+    ///
+    /// Balances cannot see the defect this exists for: settlement credited every seat
+    /// through the ACTING player's response, so the profiles were all correct and the
+    /// change record went to the wrong client. The only way to assert the address is to
+    /// keep the envelope alongside the session it was for.
+    /// </summary>
+    private readonly List<(string Session, ItemEventRouterResponse Output)> _creditedThrough = [];
+
+    /// <summary>Every response this session's winnings were written into.</summary>
+    internal IEnumerable<ItemEventRouterResponse> CreditedTo(MongoId sessionId)
+    {
+        lock (_lock)
+        {
+            return _creditedThrough
+                .Where(entry => entry.Session == sessionId.ToString())
+                .Select(entry => entry.Output)
+                .ToList();
+        }
+    }
+
+    /// <summary>
     /// Sets what every session holds in this wallet, including ones already touched.
     ///
     /// Applies to everybody rather than to one player, so a test that seeds a stash before
@@ -135,6 +157,7 @@ internal sealed class FakeBank : IBank
             _balances[(sessionId.ToString(), wallet)] = Held(sessionId, wallet) + amount;
             Credits.Add((wallet, amount));
             Outputs.Add(output);
+            _creditedThrough.Add((sessionId.ToString(), output));
         }
     }
 
@@ -328,4 +351,33 @@ internal sealed class QuietLogger<T> : ISptLogger<T>
     public void DumpAndStop()
     {
     }
+}
+
+/// <summary>
+/// One response per session, kept, so a test can ask WHO each item change was told to.
+///
+/// That is the whole point: the money moved correctly even when settlement credited
+/// everybody through the acting player's response. What was wrong was only the address on
+/// the envelope, and nothing short of holding the envelopes can see it.
+/// </summary>
+internal sealed class FakeOutputs : IOutputs
+{
+    private readonly Dictionary<string, ItemEventRouterResponse> _bySession = new();
+
+    public ItemEventRouterResponse For(MongoId sessionId)
+    {
+        var key = sessionId.ToString();
+
+        if (!_bySession.TryGetValue(key, out var output))
+        {
+            output = new ItemEventRouterResponse();
+            _bySession[key] = output;
+        }
+
+        return output;
+    }
+
+    /// <summary>The response this session would be handed, without creating one.</summary>
+    internal ItemEventRouterResponse? Existing(MongoId sessionId) =>
+        _bySession.TryGetValue(sessionId.ToString(), out var output) ? output : null;
 }

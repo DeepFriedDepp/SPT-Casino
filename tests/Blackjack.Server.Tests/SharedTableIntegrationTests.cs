@@ -31,6 +31,7 @@ public class SharedTableIntegrationTests
     private readonly FakeProfiles _profiles = new();
     private readonly SharedBlackjackStore _store = new();
     private readonly TableStore _solo = new();
+    private readonly FakeOutputs _outputs = new();
     private readonly SharedBlackjackService _service;
 
     public SharedTableIntegrationTests()
@@ -48,6 +49,7 @@ public class SharedTableIntegrationTests
             _profiles,
             _escrow,
             _solo,
+            _outputs,
             new CasinoSocket(new QuietLogger<CasinoSocket>()));
     }
 

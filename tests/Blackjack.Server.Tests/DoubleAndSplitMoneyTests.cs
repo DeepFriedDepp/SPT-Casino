@@ -61,6 +61,7 @@ public class DoubleAndSplitMoneyTests
             _profiles,
             _escrow,
             new TableStore(),
+            new FakeOutputs(),
             new CasinoSocket(new QuietLogger<CasinoSocket>()));
     }
 

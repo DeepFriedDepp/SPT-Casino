@@ -205,6 +205,7 @@ public class SharedTableIsolationTests
             Profiles,
             Escrow,
             Tables,
+            new FakeOutputs(),
             new CasinoSocket(new QuietLogger<CasinoSocket>()));
 
         /// <summary>Opens a shared table and puts a bet in the box, which is what takes money.</summary>

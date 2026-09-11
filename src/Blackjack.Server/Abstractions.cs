@@ -82,3 +82,32 @@ public interface IEscrowStore
 
     void Release(MongoId sessionId);
 }
+
+/// <summary>
+/// Where a player's item changes are collected for the reply to THEIR client.
+///
+/// ## Why the shared table needs this and the solo table never did
+///
+/// An <see cref="ItemEventRouterResponse"/> is per session: SPT holds the profile changes
+/// it has made for one player and hands them back on that player's next item event. The
+/// solo table only ever moves one person's money in one request, so passing the caller's
+/// response down was both correct and obviously correct.
+///
+/// **Settling a shared round pays several people at once**, and every one of them was
+/// being credited through the *acting* player's response. The server-side profiles were
+/// right -- the money really moved -- but the change record went to the wrong client: the
+/// player who pressed Stand was told about items that are not theirs, and everybody else
+/// was told nothing and sat on a stale stash until something made them resync.
+///
+/// So settlement asks for each seat's own response instead. An interface because
+/// `EventOutputHolder` is a concrete SPT type, and a service that names it cannot be
+/// tested without a server -- the same reason <see cref="IBank"/> exists.
+/// </summary>
+public interface IOutputs
+{
+    /// <summary>
+    /// This session's collector. The same instance for the same session within a request,
+    /// so asking for the acting player's is the response the caller already holds.
+    /// </summary>
+    ItemEventRouterResponse For(MongoId sessionId);
+}

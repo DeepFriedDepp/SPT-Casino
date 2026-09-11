@@ -66,6 +66,7 @@ public class SharedBlackjackService(
     IProfileGateway profiles,
     IEscrowStore escrow,
     TableStore solo,
+    IOutputs outputs,
     CasinoSocket socket)
 {
     private const string Moved = "table";
@@ -407,6 +408,25 @@ public class SharedBlackjackService(
         if (table.Table.Seats[seat].PendingBet > 0)
         {
             return BlackjackResponse.Failed("Your bet is already in the box.");
+        }
+
+        // **What the player asked to stake must be what leaves their stash.**
+        //
+        // A shared table has ONE currency, fixed when it opened -- the minimum and maximum
+        // are amounts and an amount means nothing until you say what of. But the panel
+        // still carries its own wallet selector from the solo table, so a player sitting
+        // at a rouble table with DOLLARS chosen could press BET and watch roubles go.
+        //
+        // The request has always carried `Wallet`; it was simply read and discarded while
+        // every debit used `table.Wallet`. Silently spending a currency the player did not
+        // name is the one outcome worse than refusing them.
+        if (!string.IsNullOrEmpty(request.Wallet)
+            && (!Enum.TryParse<Wallet>(request.Wallet, ignoreCase: true, out var asked)
+                || asked != table.Wallet))
+        {
+            return BlackjackResponse.Failed(
+                $"This table plays in {WalletInfo.For(table.Wallet).Label}, not "
+                + $"{request.Wallet}. Pick {WalletInfo.For(table.Wallet).Label} to bet here.");
         }
 
         // Taken before the bet is recorded, and refused loudly if it cannot be. The debit
@@ -775,11 +795,24 @@ public class SharedBlackjackService(
 
             var session = new MongoId(who);
 
+            // **That player's own response, not the acting player's.**
+            //
+            // An ItemEventRouterResponse is per session -- it is the change record handed
+            // back to ONE client. Crediting everybody through `output` put Bob's new
+            // roubles into the reply Alice was about to receive: Alice's client applied
+            // items that are not hers, and Bob's never heard about the ones that are, so
+            // he sat on a stale stash until something else made him resync.
+            //
+            // The money itself was always right; this is only about who gets told. For the
+            // acting player this is the same object `output` already is, so their path is
+            // unchanged.
+            var theirs = outputs.For(session);
+
             using (await sessions.EnterAsync(session))
             {
                 if (seat.TotalReturned > 0)
                 {
-                    bank.Credit(session, table.Wallet, seat.TotalReturned, output);
+                    bank.Credit(session, table.Wallet, seat.TotalReturned, theirs);
                 }
 
                 // Released whether they won or lost: the round is over either way, and a

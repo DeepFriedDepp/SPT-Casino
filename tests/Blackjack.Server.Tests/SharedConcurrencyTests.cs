@@ -61,6 +61,7 @@ public class SharedConcurrencyTests
     private readonly FakeProfiles _profiles = new();
     private readonly SharedBlackjackStore _store = new();
     private readonly TableStore _solo = new();
+    private readonly FakeOutputs _outputs = new();
 
     private static OpenTableRequest Open(int seats = 4) =>
         new() { Seats = seats, Wallet = nameof(Wallet.Roubles) };
@@ -76,6 +77,7 @@ public class SharedConcurrencyTests
         _profiles,
         _escrow,
         _solo,
+        _outputs,
         new CasinoSocket(new QuietLogger<CasinoSocket>()));
 
     /// <summary>
