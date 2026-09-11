@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same arrangement as the other four engines: anything that decides a real
+         result stays internal, and the tests are let in to force one. -->
+    <InternalsVisibleTo Include="Farkle.Game.Tests" />
+  </ItemGroup>
+
+</Project>

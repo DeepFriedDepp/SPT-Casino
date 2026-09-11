@@ -72,6 +72,8 @@ namespace Casino.Client
             Blackjack.Client.BlackjackClientPlugin.Log = Logger;
             SlotMachine.Client.SlotClientPlugin.Instance = this;
             SlotMachine.Client.SlotClientPlugin.Log = Logger;
+            Farkle.Client.FarkleClientPlugin.Instance = this;
+            Farkle.Client.FarkleClientPlugin.Log = Logger;
 
             ShowTaskBarTab = Config.Bind(
                 "Menu",

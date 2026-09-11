@@ -72,3 +72,13 @@ namespace Blackjack.Client
         internal static ConfigEntry<bool> EnforceTableMaximum;
     }
 }
+
+namespace Farkle.Client
+{
+    internal static class FarkleClientPlugin
+    {
+        internal static BaseUnityPlugin Instance;
+
+        internal static ManualLogSource Log;
+    }
+}

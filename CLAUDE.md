@@ -1,11 +1,12 @@
 # SPT-Casino -- working notes for Claude
 
-**SPT Casino** is one mod: a single task-bar tab that opens a lobby, and four tables
-behind it -- **Blackjack**, **Poker**, **Roulette** and **Slots**. It was three
+**SPT Casino** is one mod: a single task-bar tab that opens a lobby, and five tables
+behind it -- **Blackjack**, **Poker**, **Roulette**, **Slots** and **Farkle**, the last
+of which is a scoring sheet and a health check so far, not a game. It was three
 separate mods until 2026-09-05, and the seams are still visible on purpose.
 
 **One folder each side.** `BepInEx/plugins/Casino` and `SPT_Runtime/user/mods/Casino`.
-The server folder holds nine assemblies -- a metadata one plus a `.Server` and a
+The server folder holds eleven assemblies -- a metadata one plus a `.Server` and a
 `.Game` per table -- and SPT is perfectly happy with that. See "One folder, seven
 assemblies", which was written when there were seven and is true of any number.
 
@@ -18,6 +19,7 @@ all four; everything specific lives next door and is much longer:
 | Poker | `docs/poker.md` | Plays for roubles. **Shared tables** since casino 1.2.0 |
 | Roulette | `docs/roulette.md` | Plays for roubles as of 2026-09-05. Ships inside the casino |
 | Slots | `docs/slots.md` | Roubles, dollars or euros. Shipped in casino 1.1.0, with AUTO and SPEED |
+| Farkle | `docs/farkle.md` | **Not a game yet.** Scoring engine tested, ping route, a panel that says so. Phase 2 waits on four decisions |
 
 `docs/blackjack-readme.md` is Blackjack's public README, kept because it was the
 repo's front page before the merge.
@@ -40,7 +42,7 @@ scripts/<table>/          the per-table server pack and smoke scripts
 docs/<table>.md           that table's working notes
 ```
 
-**`Casino.Client` compiles the four tables in rather than owning them.** The panels
+**`Casino.Client` compiles the five tables in rather than owning them.** The panels
 are listed as `<Compile Include="..\Roulette.Client\...">` in its project file and are
 edited where they live. Not a line of them changed at the merge, which was possible
 only because no panel ever referenced the task bar, the menu icon or the escape key.
@@ -92,7 +94,7 @@ startup, and both tolerate never being set -- a shared file that throws because 
 forgot to introduce itself would be worse than the duplication it replaced.
 
 The `.Client` projects compile the shared files too, so each still builds on its
-own. `Casino.Client` compiles them once alongside the four panels.
+own. `Casino.Client` compiles them once alongside the five panels.
 
 Verified against the built assembly rather than assumed: `Casino.Client.dll` now
 carries exactly one `Textures`, one `ProfileSync`, one `CardView` and one `ChipView`.
@@ -162,8 +164,8 @@ with an `AbstractModMetadata` record in place of `package.json`. (On the 4.1.x l
 those are net10.0, `IModMetadata` is an interface, and the NuGet ids are `SPTushonka.*`
 from 4.1.3 -- see `docs/memory/2026-09-07-spt-renamed-to-sptushonka.md`.)
 
-**`SptVersion` is a hard load gate.** All five places say `~4.0.13` -- `ModMetadata.cs`
-and each `TableInfo.cs`. Move one and you must move all five.
+**`SptVersion` is a hard load gate.** All six places say `~4.0.13` -- `ModMetadata.cs`
+and each of the five `TableInfo.cs`. Move one and you must move all six.
 
 **The plugin is compiled against the game, not just against SPT.** 4.1.3's
 `PluginValidator` reads a plugin's references to `spt-*` and compares Major.Minor to

@@ -86,6 +86,19 @@ namespace Casino.Client
                 () => SlotMachine.Client.SlotPanel.IsOpen,
                 SlotMachine.Client.SlotPanel.Open,
                 SlotMachine.Client.SlotPanel.Close),
+
+            // The fifth table. Its panel prints the scoring sheet and says the game is
+            // not built yet; see docs/farkle.md for what it is waiting on. The tile is
+            // the one drawn by a script (tools/draw-farkle-tile.py); the fallback pip is
+            // the one suit nothing else took, since dice have no suit.
+            new Table(
+                "FARKLE",
+                "tile-farkle.png",
+                'D',
+                "Six dice. Bank, or roll on.",
+                () => Farkle.Client.FarklePanel.IsOpen,
+                Farkle.Client.FarklePanel.Open,
+                Farkle.Client.FarklePanel.Close),
         };
 
         /// <summary>The table the player is at, or null if they are in the lobby.</summary>

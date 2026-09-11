@@ -73,6 +73,9 @@
     <Compile Include="..\SlotMachine.Client\ReelView.cs"  Link="Games\SlotMachine\ReelView.cs" />
     <Compile Include="..\SlotMachine.Client\SlotApi.cs"   Link="Games\SlotMachine\SlotApi.cs" />
     <Compile Include="..\SlotMachine.Client\ItemArt.cs"  Link="Games\SlotMachine\ItemArt.cs" />
+
+    <Compile Include="..\Farkle.Client\FarklePanel.cs" Link="Games\Farkle\FarklePanel.cs" />
+    <Compile Include="..\Farkle.Client\FarkleApi.cs"   Link="Games\Farkle\FarkleApi.cs" />
   </ItemGroup>
 
   <ItemGroup>

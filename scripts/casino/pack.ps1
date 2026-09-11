@@ -48,7 +48,7 @@ $version = '1.3.0'
 # gate, and in which folder the server half unpacks into. One name over two builds is
 # how somebody ends up with a mod that loads and answers nothing.
 $release = '1.3.0-SPT4.0.13'
-$tables = @('Blackjack', 'Poker', 'Roulette', 'SlotMachine')
+$tables = @('Blackjack', 'Poker', 'Roulette', 'SlotMachine', 'Farkle')
 
 # Where SPT keeps its server mods, RELATIVE TO THE INSTALL ROOT.
 #
@@ -88,7 +88,7 @@ Copy-Item $built.FullName -Destination $pluginDir -Force
 
 # The casino's own art -- the tab icon -- then the union of the three asset trees,
 # which was verified identical wherever they overlap.
-foreach ($game in @('Casino', 'Roulette', 'Poker', 'Blackjack', 'SlotMachine')) {
+foreach ($game in @('Casino', 'Roulette', 'Poker', 'Blackjack', 'SlotMachine', 'Farkle')) {
     $assets = Join-Path $root "src\$game.Client\assets"
     if (Test-Path $assets) {
         Copy-Item (Join-Path $assets '*') -Destination $pluginDir -Recurse -Force
@@ -123,7 +123,7 @@ foreach ($name in $wanted) {
 # Named for the table's own config file rather than derived from the folder: the
 # slot machine's routes are /slots/*, so its config is slots.config.json and a
 # derived slotmachine.config.json would be a file nothing reads.
-$configs = @{ Blackjack = 'blackjack'; Poker = 'poker'; Roulette = 'roulette'; SlotMachine = 'slots' }
+$configs = @{ Blackjack = 'blackjack'; Poker = 'poker'; Roulette = 'roulette'; SlotMachine = 'slots'; Farkle = 'farkle' }
 foreach ($table in $tables) {
     $config = Join-Path $root ("src\{0}.Server\{1}.config.json" -f $table, $configs[$table])
     if (Test-Path $config) { Copy-Item $config -Destination $modDir -Force }

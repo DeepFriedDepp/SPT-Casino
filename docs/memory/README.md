@@ -26,3 +26,6 @@ it is worth nothing to the next session.
 | `2026-09-07-shared-table-design.md` | Two humans at one poker table: lock order, per-seat privacy, and what happens when somebody alt-F4s |
 | `2026-09-07-shared-blackjack-design.md` | Shared blackjack, and the three places copying poker would be wrong |
 | `2026-09-07-first-live-run.md` | It ran. What one real two-player match proves, and what it does not |
+| `2026-09-11-backport-from-upstream.md` | Reading upstream's fixes without cherry-picking them |
+| `2026-09-11-farkle-reference-not-source.md` | Farkle: two unlicensed repos are answer keys, not source. Which is right about what |
+| `2026-09-11-farkle-phase1.md` | Farkle Phase 0 and 1: built, verified, two work-order corrections, four open decisions |

@@ -20,6 +20,17 @@
     <Project Path="src/Casino.Client/Casino.Client.csproj" />
     <Project Path="src/Casino.Server/Casino.Server.csproj" />
   </Folder>
+  <Folder Name="/Farkle/">
+    <!--
+      The fifth table. Engine and a health-check server so far; the panel prints the
+      scoring sheet and says the game is not built. Phase 2 waits on four game-design
+      decisions recorded in docs/farkle.md.
+    -->
+    <Project Path="src/Farkle.Game/Farkle.Game.csproj" />
+    <Project Path="tests/Farkle.Game.Tests/Farkle.Game.Tests.csproj" />
+    <Project Path="src/Farkle.Server/Farkle.Server.csproj" />
+    <Project Path="src/Farkle.Client/Farkle.Client.csproj" />
+  </Folder>
   <Folder Name="/SlotMachine/">
     <!--
       The newest table. Engine and server so far: five reels, three rows, 243 ways,
