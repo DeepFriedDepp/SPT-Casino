@@ -264,10 +264,27 @@ namespace Casino.Shared
                 var bytes = System.IO.File.ReadAllBytes(path);
 
                 // Size and format are replaced by LoadImage; these are placeholders.
+                //
+                // **Trilinear, not Bilinear, and this is the fix for "choppy".** Every
+                // picture the casino ships is drawn SMALLER than it is stored -- the table
+                // is 1614 wide and the felt is 1080, a card is 500 and is drawn at 96 --
+                // so the GPU is minifying all of them, and minification is where aliasing
+                // comes from.
+                //
+                // `FilterMode.Bilinear` still picks a mip level; what it does NOT do is
+                // blend between two of them. At 1.49x minification the table sits most of
+                // the way between mip 0 and mip 1, gets drawn entirely from mip 0, and
+                // undersamples it -- which reads as jagged edges that crawl when anything
+                // moves. Trilinear blends the two levels and the crawling stops. It costs
+                // one extra texture fetch and no download size at all.
+                //
+                // The mipmaps themselves come from the `true` below: LoadImage keeps the
+                // chain when the texture it is given has one. Without it Trilinear has
+                // nothing to blend and changes nothing.
                 var texture = new Texture2D(2, 2, TextureFormat.RGBA32, true)
                 {
                     wrapMode = TextureWrapMode.Clamp,
-                    filterMode = FilterMode.Bilinear,
+                    filterMode = FilterMode.Trilinear,
                     hideFlags = HideFlags.HideAndDontSave,
                 };
 
@@ -276,6 +293,14 @@ namespace Casino.Shared
                     Object.Destroy(texture);
                     return null;
                 }
+
+                // Sharpens what trilinear alone leaves soft. The UI is screen-aligned so
+                // there is no oblique angle to correct, but the canvas scaler means the
+                // sample rate is rarely a whole number -- and anisotropic filtering takes
+                // more samples when it is not, which is exactly the in-between case that
+                // looked worst. 4 rather than the maximum: past that it is paying for
+                // angles a flat UI never reaches.
+                texture.anisoLevel = 4;
 
                 var sprite = Sprite.Create(
                     texture,

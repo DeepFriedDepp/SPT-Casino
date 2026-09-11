@@ -85,10 +85,24 @@ namespace SlotMachine.Client
 
         /// <summary>
         /// Multiplies the icon's natural pixel size, which is its grid footprint times
-        /// the inventory cell size. Three puts a one-cell item at about 190px, which is
-        /// comfortably more than the reel draws it at on a 1440p screen.
+        /// the inventory cell size.
+        ///
+        /// **Four, because three ran out above 1440p.** A reel cell is 104 logical pixels
+        /// and the panel's canvas matches height against a 1920x1080 reference, so the
+        /// cell is 104 physical pixels at 1080p, 139 at 1440p and **208 at 4K**. Three put
+        /// a one-cell item at about 190 -- which the old note here called "comfortably
+        /// more than the reel draws it at on a 1440p screen", and it was, but 4K was not
+        /// the screen it was measured against. Above 1440p the reels were magnifying, and
+        /// magnified icons are what "choppy" looks like.
+        ///
+        /// Four puts that item at about 254, which covers 4K with room left. It costs no
+        /// download size at all: every icon is rendered on the player's own machine out of
+        /// their own installation, so this is a bigger camera, not a bigger file to ship.
+        ///
+        /// Raising it further is not free -- each icon is posed into a render texture, and
+        /// this is the number that decides how big.
         /// </summary>
-        private const int ScaleFactor = 3;
+        private const int ScaleFactor = 4;
 
         private static readonly Dictionary<string, Sprite> Ready =
             new Dictionary<string, Sprite>();
@@ -118,6 +132,22 @@ namespace SlotMachine.Client
 
         /// <summary>Where a rendered icon is kept between launches.</summary>
         private static string CacheFolder => Path.Combine(Host.AssetFolder, "symbols/ingame");
+
+        /// <summary>
+        /// What a cached icon is called: the template id, then the scale it was posed at.
+        ///
+        /// **The scale is in the name so that changing it actually changes anything.**
+        /// Without it, raising <see cref="ScaleFactor"/> did nothing for the only people
+        /// who would notice -- anyone who had already played slots once had nine cached
+        /// PNGs at the old size, `PrimeFromDisk` loaded them before the renderer was ever
+        /// asked, and the reels went on showing the small icons for the life of the
+        /// install.
+        ///
+        /// A miss re-renders and writes the new name. The old files are left where they
+        /// are: nine small PNGs, harmless, and deleting files beside somebody's plugin to
+        /// tidy up is a worse habit than leaving them.
+        /// </summary>
+        private static string CacheFileFor(string template) => template + "@" + ScaleFactor + ".png";
 
         /// <summary>
         /// Loads whatever is already on disk, **before the panel is built**.
@@ -353,7 +383,7 @@ namespace SlotMachine.Client
         {
             try
             {
-                return Textures.FromFile(Path.Combine(CacheFolder, template + ".png"));
+                return Textures.FromFile(Path.Combine(CacheFolder, CacheFileFor(template)));
             }
             catch (Exception ex)
             {
@@ -410,7 +440,7 @@ namespace SlotMachine.Client
                 }
 
                 Directory.CreateDirectory(CacheFolder);
-                File.WriteAllBytes(Path.Combine(CacheFolder, template + ".png"), png);
+                File.WriteAllBytes(Path.Combine(CacheFolder, CacheFileFor(template)), png);
             }
             catch (Exception ex)
             {
