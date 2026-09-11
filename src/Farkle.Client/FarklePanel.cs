@@ -97,6 +97,7 @@ namespace Farkle.Client
         private static RectTransform _keepButton;
         private static RectTransform _bankButton;
         private static TextMeshProUGUI _keepLabel;
+        private static TextMeshProUGUI _bankLabel;
         private static TextMeshProUGUI _banner;
         private static readonly List<int> _selected = new List<int>();
 
@@ -511,7 +512,15 @@ namespace Farkle.Client
                 }
                 else if (MyTurn())
                 {
-                    Say(phase == "Choosing" ? "Pick the dice to set aside." : (_view.Value<bool?>("CanBank") ?? false) ? "Roll on, or bank." : "Roll.", Ink);
+                    var onBoard = seats != null && _mySeat.HasValue && (seats[_mySeat.Value].Value<bool?>("OnBoard") ?? false);
+                    var threshold = _view.Value<int?>("OpeningThreshold") ?? 500;
+
+                    Say(phase == "Choosing" ? "Pick the dice to set aside."
+                        : (_view.Value<bool?>("CanBank") ?? false) ? "Roll on, or bank."
+                        : turnScore > 0 && !onBoard
+                            ? turnScore.ToString("N0") + " so far. You need " + threshold.ToString("N0")
+                              + " in one turn to get on the board, so roll on -- or farkle and lose it."
+                            : "Roll.", Ink);
                 }
                 else
                 {
@@ -607,8 +616,25 @@ namespace Farkle.Client
             var mine = MyTurn() && phase != "Finished" && phase != "WaitingForOpponent";
 
             _rollButton.gameObject.SetActive(mine && phase == "Rolling");
-            _bankButton.gameObject.SetActive(mine && phase == "Rolling" && (_view.Value<bool?>("CanBank") ?? false));
+            _bankButton.gameObject.SetActive(mine && phase == "Rolling");
             _keepButton.gameObject.SetActive(mine && phase == "Choosing");
+
+            if (mine && phase == "Rolling")
+            {
+                // Farkle has no pass. A turn ends by banking or by farkling, and a seat not
+                // yet on the board may only bank a turn worth the opening threshold. So the
+                // button stays, dimmed, and says what it is waiting for -- a button that
+                // simply disappears reads as a missing feature rather than a rule.
+                var canBank = _view.Value<bool?>("CanBank") ?? false;
+                var turnScore = _view.Value<int?>("TurnScore") ?? 0;
+                var threshold = _view.Value<int?>("OpeningThreshold") ?? 500;
+
+                _bankLabel.text = canBank ? "BANK  " + turnScore.ToString("N0")
+                    : turnScore == 0 ? "BANK"
+                    : "BANK  needs " + threshold.ToString("N0");
+                _bankLabel.color = canBank ? Ink : Dim;
+                _bankButton.GetComponent<Image>().color = canBank ? Color.white : new Color(1f, 1f, 1f, 0.45f);
+            }
 
             if (phase == "Choosing")
             {
@@ -1054,39 +1080,42 @@ namespace Farkle.Client
             }
 
             var felt = NewBox("Felt", rect, Color.white);
-            felt.sizeDelta = new Vector2(760f, 300f);
-            felt.anchoredPosition = new Vector2(0f, 60f);
+            // Below the seat cards, which end at 140: the top edge here is 120. The first
+            // build put this at 60 with a height of 300 and covered both name tags.
+            felt.sizeDelta = new Vector2(760f, 270f);
+            felt.anchoredPosition = new Vector2(0f, -15f);
             felt.GetComponent<Image>().sprite = Textures.RoundedBox(16, Felt, Edge, 2);
             felt.GetComponent<Image>().type = Image.Type.Sliced;
             felt.GetComponent<Image>().raycastTarget = false;
 
             _banner = NewText("Banner", felt, string.Empty, 44f);
             _banner.rectTransform.sizeDelta = new Vector2(700f, 60f);
-            _banner.rectTransform.anchoredPosition = new Vector2(0f, 95f);
+            _banner.rectTransform.anchoredPosition = new Vector2(0f, 85f);
 
             _diceRow = NewBox("Dice", felt, new Color(0f, 0f, 0f, 0.001f));
             _diceRow.sizeDelta = new Vector2(740f, DieSize + 10f);
-            _diceRow.anchoredPosition = new Vector2(0f, 20f);
+            _diceRow.anchoredPosition = new Vector2(0f, 15f);
             _diceRow.GetComponent<Image>().raycastTarget = false;
 
             _asideRow = NewBox("Aside", felt, new Color(0f, 0f, 0f, 0.001f));
             _asideRow.sizeDelta = new Vector2(740f, SmallDie + 10f);
-            _asideRow.anchoredPosition = new Vector2(0f, -70f);
+            _asideRow.anchoredPosition = new Vector2(0f, -62f);
             _asideRow.GetComponent<Image>().raycastTarget = false;
 
             _turnLabel = NewText("Turn", felt, string.Empty, 20f);
             _turnLabel.rectTransform.sizeDelta = new Vector2(700f, 30f);
-            _turnLabel.rectTransform.anchoredPosition = new Vector2(0f, -118f);
+            _turnLabel.rectTransform.anchoredPosition = new Vector2(0f, -108f);
             _turnLabel.color = Gold;
 
             _turnNote = NewText("TurnNote", rect, string.Empty, 18f);
             _turnNote.rectTransform.sizeDelta = new Vector2(900f, 30f);
-            _turnNote.rectTransform.anchoredPosition = new Vector2(0f, -120f);
+            _turnNote.rectTransform.anchoredPosition = new Vector2(0f, -180f);
 
-            _rollButton = BuildButton(rect, "ROLL", new Vector2(-200f, -190f), 200f, Roll);
-            _keepButton = BuildButton(rect, "SET ASIDE", new Vector2(0f, -190f), 240f, KeepSelected);
+            _rollButton = BuildButton(rect, "ROLL", new Vector2(-220f, -245f), 200f, Roll);
+            _keepButton = BuildButton(rect, "SET ASIDE", new Vector2(0f, -245f), 240f, KeepSelected);
             _keepLabel = _keepButton.GetComponentInChildren<TextMeshProUGUI>();
-            _bankButton = BuildButton(rect, "BANK", new Vector2(200f, -190f), 200f, Bank);
+            _bankButton = BuildButton(rect, "BANK", new Vector2(220f, -245f), 220f, Bank);
+            _bankLabel = _bankButton.GetComponentInChildren<TextMeshProUGUI>();
         }
 
         /// <summary>
