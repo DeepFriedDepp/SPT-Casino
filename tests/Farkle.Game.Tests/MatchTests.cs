@@ -137,46 +137,34 @@ public class MatchTests
         Assert.Contains(match.Turn, e => e.Kind == TurnEventKind.HotDice);
     }
 
-    // ---- banking and the threshold ---------------------------------------------------
+    // ---- banking ---------------------------------------------------------------------
 
+    /// <summary>
+    /// Anything set aside may be banked. The 500 opening threshold was built and taken
+    /// out the same day at the owner's call; this pins its absence.
+    /// </summary>
     [Fact]
-    public void NothingUnderTheThresholdCanBeBankedBeforeTheBoard()
+    public void AnythingSetAsideMayBeBanked()
     {
         var match = Seated();
-        match.RollDice(Stacked(1, 5, 2, 3, 4, 6));
-        match.KeepDice([0, 1]);
+        match.RollDice(Stacked(5, 2, 3, 4, 6, 6));
+        match.KeepDice([0]);
 
-        Assert.False(match.CanBank);
-        var ex = Assert.Throws<InvalidOperationException>(match.Bank);
-        Assert.Contains("500", ex.Message);
-        Assert.Equal(Phase.Rolling, match.Phase);
+        Assert.True(match.CanBank);
+        match.Bank();
+
+        Assert.Equal(50, match.Seats[0].Score);
+        Assert.Equal(1, match.CurrentSeat);
+        Assert.Contains(match.LastTurn, e => e.Kind == TurnEventKind.Banked && e.Points == 50);
     }
 
     [Fact]
-    public void TheThresholdOnceClearedIsClearedForGood()
+    public void NothingCanBeBankedBeforeSomethingIsSetAside()
     {
         var match = Seated();
 
-        // Alice: 600 in one turn, on the board.
-        match.RollDice(Stacked(6, 6, 6, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        Assert.True(match.CanBank);
-        match.Bank();
-
-        Assert.True(match.Seats[0].OnBoard);
-        Assert.Equal(600, match.Seats[0].Score);
-        Assert.Equal(1, match.CurrentSeat);
-
-        // Bob farkles straight away.
-        match.RollDice(Stacked(2, 2, 3, 3, 4, 6));
-        Assert.Equal(0, match.CurrentSeat);
-
-        // Alice may now bank 50.
-        match.RollDice(Stacked(5, 2, 3, 4, 6, 6));
-        match.KeepDice([0]);
-        Assert.True(match.CanBank);
-        match.Bank();
-        Assert.Equal(650, match.Seats[0].Score);
+        Assert.False(match.CanBank);
+        Assert.Throws<InvalidOperationException>(match.Bank);
     }
 
     [Fact]
@@ -190,23 +178,13 @@ public class MatchTests
 
     // ---- the end ---------------------------------------------------------------------
 
+    /// <summary>First to the target wins on the spot. No last turn for the other seat.</summary>
     [Fact]
-    public void PassingTheTargetGivesTheOtherSeatOneLastTurn()
+    public void FirstToTheTargetWinsOnTheSpot()
     {
-        var match = Seated(new FarkleRules(Target: 1000, OpeningThreshold: 500));
+        var match = Seated(new FarkleRules(Target: 1000));
 
-        // Alice banks 1000 straight off.
         match.RollDice(Stacked(1, 1, 1, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        match.Bank();
-
-        Assert.Equal(Phase.Rolling, match.Phase);
-        Assert.Equal(1, match.FinalTurnFor);
-        Assert.Equal(1, match.CurrentSeat);
-        Assert.Null(match.Winner);
-
-        // Bob's last turn: 600, not enough.
-        match.RollDice(Stacked(6, 6, 6, 2, 3, 4));
         match.KeepDice([0, 1, 2]);
         match.Bank();
 
@@ -217,64 +195,60 @@ public class MatchTests
     }
 
     [Fact]
-    public void TheLastTurnCanStealTheMatch()
+    public void PassingTheTargetCountsTheSameAsReachingIt()
     {
-        var match = Seated(new FarkleRules(Target: 1000, OpeningThreshold: 500));
+        var match = Seated(new FarkleRules(Target: 1000));
 
-        match.RollDice(Stacked(1, 1, 1, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        match.Bank();
-
-        // Bob: two triplets, 2500, and wins.
         match.RollDice(Stacked(2, 2, 2, 5, 5, 5));
         match.KeepDice([0, 1, 2, 3, 4, 5]);
         match.Bank();
 
         Assert.Equal(Phase.Finished, match.Phase);
-        Assert.Equal(1, match.Winner);
-    }
-
-    [Fact]
-    public void ATieGoesToTheSeatThatSetTheMark()
-    {
-        var match = Seated(new FarkleRules(Target: 1000, OpeningThreshold: 500));
-
-        match.RollDice(Stacked(1, 1, 1, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        match.Bank();
-
-        match.RollDice(Stacked(1, 1, 1, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        match.Bank();
-
-        Assert.Equal(1000, match.Seats[0].Score);
-        Assert.Equal(1000, match.Seats[1].Score);
+        Assert.Equal(2500, match.Seats[0].Score);
         Assert.Equal(0, match.Winner);
     }
 
     [Fact]
-    public void AFarkleOnTheLastTurnEndsIt()
+    public void TheTargetIsOnlyCheckedWhenBanked()
     {
-        var match = Seated(new FarkleRules(Target: 1000, OpeningThreshold: 500));
+        var match = Seated(new FarkleRules(Target: 1000));
 
         match.RollDice(Stacked(1, 1, 1, 2, 3, 4));
         match.KeepDice([0, 1, 2]);
-        match.Bank();
 
-        match.RollDice(Stacked(2, 2, 3, 3, 4, 6));
+        // 1000 on the turn, not banked. Still rolling, still anybody's.
+        Assert.Equal(Phase.Rolling, match.Phase);
+        Assert.Null(match.Winner);
 
-        Assert.Equal(Phase.Finished, match.Phase);
-        Assert.Equal(0, match.Winner);
+        match.RollDice(Stacked(2, 2, 3)); // and it is gone
+
+        Assert.Equal(Phase.Rolling, match.Phase);
+        Assert.Equal(1, match.CurrentSeat);
+        Assert.Equal(0, match.Seats[0].Score);
+    }
+
+    [Fact]
+    public void EveryListedTargetIsAllowedAndNothingElseIs()
+    {
+        Assert.Equal([1000, 2000, 3000, 5000, 10000], FarkleRules.Targets);
+
+        foreach (var target in FarkleRules.Targets)
+        {
+            Assert.True(FarkleRules.Allows(target));
+        }
+
+        Assert.False(FarkleRules.Allows(500));
+        Assert.False(FarkleRules.Allows(4000));
+        Assert.False(FarkleRules.Allows(0));
     }
 
     [Fact]
     public void NothingMovesAfterTheEnd()
     {
-        var match = Seated(new FarkleRules(Target: 1000, OpeningThreshold: 500));
+        var match = Seated(new FarkleRules(Target: 1000));
         match.RollDice(Stacked(1, 1, 1, 2, 3, 4));
         match.KeepDice([0, 1, 2]);
         match.Bank();
-        match.RollDice(Stacked(2, 2, 3, 3, 4, 6));
 
         Assert.Throws<InvalidOperationException>(() => match.RollDice(new Random(1)));
         Assert.Throws<InvalidOperationException>(match.Bank);
@@ -284,26 +258,23 @@ public class MatchTests
     // ---- the two rules the server leans on -------------------------------------------
 
     [Fact]
-    public void YieldBanksWhenItMayAndLosesTheTurnWhenItMayNot()
+    public void YieldBanksWhatIsSetAsideAndPassesWhenNothingIs()
     {
         var match = Seated();
 
-        // 150 before the board: yielding loses it.
+        // 150 set aside: yielding banks it, since anything set aside may be banked.
         match.RollDice(Stacked(1, 5, 2, 3, 4, 6));
         match.KeepDice([0, 1]);
         match.Yield();
 
-        Assert.Equal(0, match.Seats[0].Score);
+        Assert.Equal(150, match.Seats[0].Score);
         Assert.Equal(1, match.CurrentSeat);
         Assert.Contains(match.LastTurn, e => e.Kind == TurnEventKind.Yielded && e.Points == 150);
 
-        // Bob at 600: yielding banks it.
-        match.RollDice(Stacked(6, 6, 6, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
+        // Bob has not rolled: yielding passes with nothing.
         match.Yield();
 
-        Assert.Equal(600, match.Seats[1].Score);
-        Assert.True(match.Seats[1].OnBoard);
+        Assert.Equal(0, match.Seats[1].Score);
         Assert.Equal(0, match.CurrentSeat);
     }
 
@@ -358,7 +329,6 @@ public class MatchTests
         Assert.Equal(2, view.Seats.Count);
         Assert.Equal("Alice", view.Seats[0].Name);
         Assert.Equal(10_000, view.Target);
-        Assert.Equal(500, view.OpeningThreshold);
         Assert.Contains(view.Keeps, k => k.Indices.SequenceEqual([0, 1, 2, 3]) && k.Points == 250);
         Assert.DoesNotContain(view.Keeps, k => k.Indices.Contains(4));
         Assert.Equal("None", view.Ending);
@@ -382,7 +352,7 @@ public class MatchTests
     public void RulesAreChecked()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new FarkleMatch(new FarkleRules(Target: 0)));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new FarkleMatch(new FarkleRules(Target: 100, OpeningThreshold: 500)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new FarkleMatch(new FarkleRules(Target: -5)));
     }
 
     /// <summary>A Random that deals these faces in this order. What "stacked deck" means for dice.</summary>

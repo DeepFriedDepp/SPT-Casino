@@ -72,6 +72,7 @@ namespace Farkle.Client
         private static int? _mySeat;
         private static long _stake = 50_000;
         private static int _botIndex;
+        private static int _targetIndex = -1;
         private static string _replayedTurn;
 
         // The frame's pieces.
@@ -83,6 +84,8 @@ namespace Farkle.Client
         private static RectTransform _tableList;
         private static TextMeshProUGUI _stakeLabel;
         private static TextMeshProUGUI _botLabel;
+        private static TextMeshProUGUI _targetLabel;
+        private static TextMeshProUGUI _leaveLabel;
         private static TextMeshProUGUI _sheet;
         private static TextMeshProUGUI _odds;
         private static readonly RectTransform[] _seatCards = new RectTransform[2];
@@ -198,6 +201,10 @@ namespace Farkle.Client
             RenderSheet();
             _stakeLabel.text = _stake.ToString("N0") + " R";
             _botLabel.text = "vs " + BotName();
+            _targetLabel.text = "First to " + TargetValue().ToString("N0");
+
+            // Nothing to leave from here. The button closes the table instead, and says so.
+            _leaveLabel.text = "CLOSE";
 
             for (var i = _tableList.childCount - 1; i >= 0; i--)
             {
@@ -230,7 +237,8 @@ namespace Farkle.Client
                     line.GetComponent<Image>().sprite = Textures.RoundedBox(6, new Color(0f, 0f, 0f, 0.30f), Edge, 1);
                     line.GetComponent<Image>().type = Image.Type.Sliced;
 
-                    var label = NewText("Who", line, host + "  -  " + stake.ToString("N0") + " R a seat", 18f);
+                    var target = row.Value<int?>("Target") ?? 10000;
+                    var label = NewText("Who", line, host + "  -  " + stake.ToString("N0") + " R a seat, to " + target.ToString("N0"), 18f);
                     label.rectTransform.sizeDelta = new Vector2(380f, 40f);
                     label.rectTransform.anchoredPosition = new Vector2(-70f, 0f);
                     label.alignment = TextAlignmentOptions.Left;
@@ -244,14 +252,13 @@ namespace Farkle.Client
 
             if (_status.text.Length == 0)
             {
-                Say("Two seats, one match to " + (_ping?.Value<int?>("Target") ?? 10000).ToString("N0")
-                    + ". Each player stakes the same; the winner takes both.", Dim);
+                Say("Two seats, one race. Pick the stake and the target; the first to the target takes both stakes.", Dim);
             }
         }
 
         private static void OpenTable(bool vsBot)
         {
-            var reply = FarkleApi.Open(_stake, vsBot, vsBot ? BotName() : string.Empty);
+            var reply = FarkleApi.Open(_stake, TargetValue(), vsBot, vsBot ? BotName() : string.Empty);
             Note(reply);
 
             if (reply == null || reply.Value<bool?>("Ok") == false)
@@ -286,6 +293,15 @@ namespace Farkle.Client
 
         private static void Leave()
         {
+            // Not seated: there is no table to leave, so the button is CLOSE and closes
+            // the panel. The first live run sent this request anyway, got "You are not at a
+            // table" back with a default balance of zero, and painted "0 R in the stash".
+            if (_tableId == null)
+            {
+                Close();
+                return;
+            }
+
             var reply = FarkleApi.Leave();
             Note(reply);
 
@@ -299,10 +315,31 @@ namespace Farkle.Client
             _status.text = string.Empty;
             ShowLobby(FarkleApi.Tables());
 
-            if (reply != null && reply.Value<int?>("Balance") is int balance)
+            // Only from a reply that succeeded. A refusal carries the record's default
+            // balance, which is zero, and zero is not what is in the stash.
+            if (reply != null && reply.Value<bool?>("Ok") != false && reply.Value<int?>("Balance") is int balance)
             {
                 RenderBalance(balance);
             }
+        }
+
+        private static int TargetValue()
+        {
+            var targets = _ping?["Targets"] as JArray;
+
+            if (targets == null || targets.Count == 0)
+            {
+                return 10_000;
+            }
+
+            if (_targetIndex < 0)
+            {
+                _targetIndex = targets.Count - 1;
+            }
+
+            _targetIndex = ((_targetIndex % targets.Count) + targets.Count) % targets.Count;
+
+            return targets[_targetIndex].Value<int>();
         }
 
         private static string BotName()
@@ -453,10 +490,8 @@ namespace Farkle.Client
                 _seatNames[i].color = occupied ? Ink : Dim;
                 _seatScores[i].text = occupied ? (seat.Value<int?>("Score") ?? 0).ToString("N0") : "-";
 
-                var onBoard = seat?.Value<bool?>("OnBoard") ?? false;
                 _seatNotes[i].text = !occupied ? string.Empty
                     : finished ? (winner == i ? "WINNER" : string.Empty)
-                    : !onBoard ? "needs " + (_view.Value<int?>("OpeningThreshold") ?? 500) + " to get on the board"
                     : (seat.Value<bool?>("IsBot") ?? false) ? "the house's regular" : string.Empty;
 
                 var lit = !finished && phase != "WaitingForOpponent" && current == i;
@@ -471,9 +506,13 @@ namespace Farkle.Client
             var turnScore = _view.Value<int?>("TurnScore") ?? 0;
             var inHand = _view.Value<int?>("DiceInHand") ?? 6;
 
+            var target = _view.Value<int?>("Target") ?? 10000;
+
             _turnLabel.text = phase == "WaitingForOpponent" || finished
                 ? string.Empty
-                : "This turn: " + turnScore.ToString("N0") + "    " + inHand + " to roll";
+                : "First to " + target.ToString("N0") + "      This turn: " + turnScore.ToString("N0") + "      " + inHand + " to roll";
+
+            _leaveLabel.text = "LEAVE";
 
             // The latest thing that happened, in the engine's own words.
             var events = _view["Turn"] as JArray;
@@ -490,7 +529,7 @@ namespace Farkle.Client
             if (phase == "WaitingForOpponent")
             {
                 _banner.text = string.Empty;
-                Say("Your " + _stake.ToString("N0") + " is on the table. LEAVE takes it back until somebody sits down.", Dim);
+                Say("Your " + _stake.ToString("N0") + " is on the table, first to " + target.ToString("N0") + ". LEAVE takes it back until somebody sits down.", Dim);
             }
             else if (finished)
             {
@@ -506,21 +545,11 @@ namespace Farkle.Client
             {
                 _banner.text = string.Empty;
 
-                if (_view.Value<int?>("FinalTurnFor") is int finalFor)
+                if (MyTurn())
                 {
-                    Say(finalFor == _mySeat ? "Last turn. Beat their score or lose." : "They get one last turn to beat you.", Gold);
-                }
-                else if (MyTurn())
-                {
-                    var onBoard = seats != null && _mySeat.HasValue && (seats[_mySeat.Value].Value<bool?>("OnBoard") ?? false);
-                    var threshold = _view.Value<int?>("OpeningThreshold") ?? 500;
-
                     Say(phase == "Choosing" ? "Pick the dice to set aside."
                         : (_view.Value<bool?>("CanBank") ?? false) ? "Roll on, or bank."
-                        : turnScore > 0 && !onBoard
-                            ? turnScore.ToString("N0") + " so far. You need " + threshold.ToString("N0")
-                              + " in one turn to get on the board, so roll on -- or farkle and lose it."
-                            : "Roll.", Ink);
+                        : "Roll.", Ink);
                 }
                 else
                 {
@@ -621,17 +650,12 @@ namespace Farkle.Client
 
             if (mine && phase == "Rolling")
             {
-                // Farkle has no pass. A turn ends by banking or by farkling, and a seat not
-                // yet on the board may only bank a turn worth the opening threshold. So the
-                // button stays, dimmed, and says what it is waiting for -- a button that
-                // simply disappears reads as a missing feature rather than a rule.
+                // Anything set aside may be banked. Before the first keep of a turn there is
+                // nothing to bank, so the button waits, dimmed, rather than disappearing.
                 var canBank = _view.Value<bool?>("CanBank") ?? false;
                 var turnScore = _view.Value<int?>("TurnScore") ?? 0;
-                var threshold = _view.Value<int?>("OpeningThreshold") ?? 500;
 
-                _bankLabel.text = canBank ? "BANK  " + turnScore.ToString("N0")
-                    : turnScore == 0 ? "BANK"
-                    : "BANK  needs " + threshold.ToString("N0");
+                _bankLabel.text = canBank ? "BANK  " + turnScore.ToString("N0") : "BANK";
                 _bankLabel.color = canBank ? Ink : Dim;
                 _bankButton.GetComponent<Image>().color = canBank ? Color.white : new Color(1f, 1f, 1f, 0.45f);
             }
@@ -965,7 +989,8 @@ namespace Farkle.Client
             _balance.alignment = TextAlignmentOptions.Left;
             _balance.color = Dim;
 
-            BuildButton(_frame, "LEAVE", new Vector2(FrameWidth * 0.5f - 110f, FrameHeight * 0.5f - 44f), 160f, Leave);
+            var leave = BuildButton(_frame, "LEAVE", new Vector2(FrameWidth * 0.5f - 110f, FrameHeight * 0.5f - 44f), 160f, Leave);
+            _leaveLabel = leave.GetComponentInChildren<TextMeshProUGUI>();
 
             _status = NewText("Status", _frame, string.Empty, 18f);
             _status.rectTransform.sizeDelta = new Vector2(FrameWidth - 80f, 44f);
@@ -1011,32 +1036,43 @@ namespace Farkle.Client
             stakeTitle.rectTransform.anchoredPosition = new Vector2(300f, 205f);
             stakeTitle.color = Dim;
 
-            BuildButton(rect, "-", new Vector2(150f, 165f), 56f, () => StepStake(-10_000));
-            BuildButton(rect, "-100k", new Vector2(215f, 165f), 70f, () => StepStake(-100_000));
+            BuildButton(rect, "-", new Vector2(150f, 170f), 56f, () => StepStake(-10_000));
+            BuildButton(rect, "-100k", new Vector2(215f, 170f), 70f, () => StepStake(-100_000));
             _stakeLabel = NewText("Stake", rect, string.Empty, 24f);
             _stakeLabel.rectTransform.sizeDelta = new Vector2(160f, 40f);
-            _stakeLabel.rectTransform.anchoredPosition = new Vector2(300f, 165f);
+            _stakeLabel.rectTransform.anchoredPosition = new Vector2(300f, 170f);
             _stakeLabel.color = Gold;
-            BuildButton(rect, "+100k", new Vector2(385f, 165f), 70f, () => StepStake(100_000));
-            BuildButton(rect, "+", new Vector2(450f, 165f), 56f, () => StepStake(10_000));
+            BuildButton(rect, "+100k", new Vector2(385f, 170f), 70f, () => StepStake(100_000));
+            BuildButton(rect, "+", new Vector2(450f, 170f), 56f, () => StepStake(10_000));
 
-            BuildButton(rect, "OPEN A TABLE FOR A FRIEND", new Vector2(300f, 105f), 360f, () => OpenTable(false));
+            // How long a race: 1,000 to 10,000, chosen here and fixed for the table.
+            _targetLabel = NewText("Target", rect, string.Empty, 19f);
+            _targetLabel.rectTransform.sizeDelta = new Vector2(220f, 30f);
+            _targetLabel.rectTransform.anchoredPosition = new Vector2(265f, 122f);
+            _targetLabel.color = Gold;
+            BuildButton(rect, ">", new Vector2(405f, 122f), 44f, () =>
+            {
+                _targetIndex++;
+                _targetLabel.text = "First to " + TargetValue().ToString("N0");
+            });
+
+            BuildButton(rect, "OPEN A TABLE FOR A FRIEND", new Vector2(300f, 70f), 360f, () => OpenTable(false));
 
             _botLabel = NewText("Bot", rect, string.Empty, 17f);
             _botLabel.rectTransform.sizeDelta = new Vector2(200f, 30f);
-            _botLabel.rectTransform.anchoredPosition = new Vector2(260f, 55f);
+            _botLabel.rectTransform.anchoredPosition = new Vector2(260f, 22f);
             _botLabel.color = Dim;
-            BuildButton(rect, ">", new Vector2(390f, 55f), 44f, () =>
+            BuildButton(rect, ">", new Vector2(390f, 22f), 44f, () =>
             {
                 _botIndex++;
                 _botLabel.text = "vs " + BotName();
             });
 
-            BuildButton(rect, "PLAY THE HOUSE", new Vector2(300f, 10f), 360f, () => OpenTable(true));
+            BuildButton(rect, "PLAY THE HOUSE", new Vector2(300f, -24f), 360f, () => OpenTable(true));
 
             _sheet = NewText("Sheet", rect, string.Empty, 16f);
-            _sheet.rectTransform.sizeDelta = new Vector2(360f, 230f);
-            _sheet.rectTransform.anchoredPosition = new Vector2(300f, -150f);
+            _sheet.rectTransform.sizeDelta = new Vector2(360f, 200f);
+            _sheet.rectTransform.anchoredPosition = new Vector2(300f, -165f);
             _sheet.alignment = TextAlignmentOptions.Top;
             _sheet.color = Dim;
 

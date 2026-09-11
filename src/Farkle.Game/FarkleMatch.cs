@@ -1,12 +1,20 @@
 namespace Farkle.Game;
 
-/// <summary>The two numbers a match is played to. Fixed for the casino; a test shortens them.</summary>
-/// <param name="Target">First to bank this many, subject to the other player's last turn.</param>
-/// <param name="OpeningThreshold">
-/// A player is not on the board until one turn banks at least this. Until then every
-/// turn is roll-until-here-or-farkle, and nothing short of it may be banked.
-/// </param>
-public sealed record FarkleRules(int Target = 10_000, int OpeningThreshold = 500);
+/// <summary>
+/// What a match is played to. Chosen per table when it opens, from <see cref="Targets"/>.
+/// </summary>
+/// <param name="Target">First to bank this many wins, on the spot.</param>
+public sealed record FarkleRules(int Target = 10_000)
+{
+    /// <summary>
+    /// The targets a table may be opened at. A short race is a different game from a
+    /// long one -- 1,000 is two or three good turns and a coin flip with money on it;
+    /// 10,000 is the standard match -- and the owner wanted the choice on the table.
+    /// </summary>
+    public static IReadOnlyList<int> Targets { get; } = [1_000, 2_000, 3_000, 5_000, 10_000];
+
+    public static bool Allows(int target) => Targets.Contains(target);
+}
 
 public enum Phase
 {
@@ -26,7 +34,7 @@ public enum Ending
 {
     None,
 
-    /// <summary>Somebody banked past the target and the other seat has had its last turn.</summary>
+    /// <summary>Somebody banked to the target. First there wins.</summary>
     ReachedTarget,
 
     /// <summary>Somebody stood up mid-match. The other seat wins outright.</summary>
@@ -45,9 +53,6 @@ public sealed class Seat(int index)
     public bool IsBot { get; internal set; }
 
     public int Score { get; internal set; }
-
-    /// <summary>Has banked a turn of at least the opening threshold.</summary>
-    public bool OnBoard { get; internal set; }
 }
 
 /// <summary>Something that happened in a turn, as the client replays it.</summary>
@@ -85,13 +90,16 @@ public enum TurnEventKind
 /// scores nothing -- a farkle -- and the turn's points are gone. Setting aside every die
 /// is hot dice: six fresh dice, the turn's points intact. A keep must have every die in
 /// it scoring (`Scored.EveryDieCounts`); a roll is a farkle only when nothing at all
-/// scores.
+/// scores. **Anything set aside may be banked**: there is no opening threshold. The
+/// standard 500 was built first and taken out on 2026-09-11 at the owner's call -- a
+/// player forced to keep rolling a turn they wanted to keep read it as a missing button,
+/// and the rule bought nothing the stake did not already buy.
 ///
 /// ## The end
 ///
-/// The first seat to bank at or past the target does not win on the spot. The other
-/// seat gets one last turn to beat it, and whoever is higher after that wins. A tie goes
-/// to the seat that set the mark: the other had a turn to beat it and did not.
+/// **First to bank at or past the target wins, on the spot.** No last turn for the other
+/// seat, no tie to break. The standard last-turn rule was also built first and also came
+/// out with the threshold: with the target chosen per table, a race is what was asked for.
 ///
 /// ## Two rules the server leans on
 ///
@@ -115,9 +123,9 @@ public sealed class FarkleMatch
         Rules = rules ?? new FarkleRules();
         _log = log ?? GameLog.Null;
 
-        if (Rules.Target <= 0 || Rules.OpeningThreshold < 0 || Rules.OpeningThreshold > Rules.Target)
+        if (Rules.Target <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(rules), "A target above zero, a threshold no higher than it.");
+            throw new ArgumentOutOfRangeException(nameof(rules), "A target above zero.");
         }
     }
 
@@ -133,9 +141,6 @@ public sealed class FarkleMatch
     public int CurrentSeat { get; private set; }
 
     public int? Winner { get; private set; }
-
-    /// <summary>The seat taking its one last turn after the other passed the target, if any.</summary>
-    public int? FinalTurnFor { get; private set; }
 
     /// <summary>The faces showing. Empty between rolls.</summary>
     public IReadOnlyList<int> Roll => _roll;
@@ -160,14 +165,8 @@ public sealed class FarkleMatch
 
     public Seat Other(int seat) => _seats[1 - seat];
 
-    /// <summary>
-    /// Whether the current seat may bank right now: something set aside this turn, and
-    /// either already on the board or over the opening threshold.
-    /// </summary>
-    public bool CanBank =>
-        Phase == Phase.Rolling
-        && TurnScore > 0
-        && (Current.OnBoard || TurnScore >= Rules.OpeningThreshold);
+    /// <summary>Whether the current seat may bank right now: something set aside this turn.</summary>
+    public bool CanBank => Phase == Phase.Rolling && TurnScore > 0;
 
     /// <summary>The keeps the current roll allows, by position. Empty unless choosing.</summary>
     public IReadOnlyList<Keep> LegalKeeps => Phase == Phase.Choosing ? Scoring.Keeps(_roll) : [];
@@ -287,7 +286,7 @@ public sealed class FarkleMatch
         return scored;
     }
 
-    /// <summary>Banks the turn. Refused below the opening threshold for a seat not yet on the board.</summary>
+    /// <summary>Banks the turn. Anything set aside may be banked.</summary>
     public void Bank()
     {
         if (Phase != Phase.Rolling)
@@ -300,12 +299,6 @@ public sealed class FarkleMatch
         if (TurnScore <= 0)
         {
             throw new InvalidOperationException("Nothing to bank. Roll first.");
-        }
-
-        if (!Current.OnBoard && TurnScore < Rules.OpeningThreshold)
-        {
-            throw new InvalidOperationException(
-                $"You need {Rules.OpeningThreshold:N0} in one turn to get on the board. Keep rolling.");
         }
 
         BankCore();
@@ -357,7 +350,7 @@ public sealed class FarkleMatch
     /// dice in hand, as though it had got there by keeping. Internal because only play may
     /// move a real turn; the bot measurements need positions faster than play reaches them.
     /// </summary>
-    internal void Force(int turnScore, int diceInHand, bool onBoard)
+    internal void Force(int turnScore, int diceInHand)
     {
         if (Phase != Phase.Rolling)
         {
@@ -366,7 +359,6 @@ public sealed class FarkleMatch
 
         TurnScore = turnScore;
         DiceInHand = diceInHand;
-        Current.OnBoard = onBoard;
     }
 
     // ---- inside ----------------------------------------------------------------------
@@ -374,7 +366,6 @@ public sealed class FarkleMatch
     private void BankCore()
     {
         Current.Score += TurnScore;
-        Current.OnBoard = true;
         Record(TurnEventKind.Banked, [], TurnScore, $"{Current.Name} banks {TurnScore:N0} -- {Current.Score:N0}.");
         EndTurn();
     }
@@ -384,19 +375,10 @@ public sealed class FarkleMatch
         var finished = CurrentSeat;
         var other = 1 - finished;
 
-        if (FinalTurnFor == finished)
+        if (_seats[finished].Score >= Rules.Target)
         {
-            // The last turn has been taken. Higher score wins; a tie goes to the seat
-            // that set the mark, because this one had a turn to beat it and did not.
-            var winner = _seats[finished].Score > _seats[other].Score ? finished : other;
-            Finish(winner, Ending.ReachedTarget);
+            Finish(finished, Ending.ReachedTarget);
             return;
-        }
-
-        if (FinalTurnFor is null && _seats[finished].Score >= Rules.Target)
-        {
-            FinalTurnFor = other;
-            Say($"{_seats[finished].Name} is past {Rules.Target:N0}. {_seats[other].Name} gets one last turn.");
         }
 
         _lastTurn = _turn.ToList();

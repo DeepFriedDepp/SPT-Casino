@@ -161,9 +161,8 @@ static void PlayOut(FarkleMatch match, FarkleBot[] bots, Random rng, Dictionary<
             var remaining = match.DiceInHand - decision.Keep.Count;
             var kept = match.KeepDice(decision.Keep);
 
-            // Only count it where there was a choice: a keep that could not have been
-            // banked (under the threshold) or that had to be rolled (hot dice) is not a
-            // decision, and averaging over it drowns the differences.
+            // Only count it where there was a choice: a keep that had to be rolled (hot
+            // dice) is not a decision, and averaging over it drowns the differences.
             var couldBank = match.CanBank;
 
             if (stats is not null && couldBank && remaining > 0)

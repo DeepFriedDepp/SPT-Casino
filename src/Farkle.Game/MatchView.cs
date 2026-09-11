@@ -1,7 +1,7 @@
 namespace Farkle.Game;
 
 /// <summary>One chair, as the client draws it.</summary>
-public sealed record SeatView(int Index, string Name, bool IsBot, bool Occupied, int Score, bool OnBoard);
+public sealed record SeatView(int Index, string Name, bool IsBot, bool Occupied, int Score);
 
 /// <summary>One thing that happened, as the client replays it. Kind travels as a string.</summary>
 public sealed record TurnEventView(int Seat, string Kind, IReadOnlyList<int> Dice, int Points, string Note);
@@ -27,17 +27,15 @@ public sealed record MatchView(
     IReadOnlyList<KeepView> Keeps,
     bool CanBank,
     int Target,
-    int OpeningThreshold,
     int TurnNumber,
     int? Winner,
     string Ending,
-    int? FinalTurnFor,
     IReadOnlyList<TurnEventView> Turn,
     IReadOnlyList<TurnEventView> LastTurn)
 {
     public static MatchView From(FarkleMatch match) => new(
         match.Phase.ToString(),
-        match.Seats.Select(s => new SeatView(s.Index, s.Name, s.IsBot, s.Occupied, s.Score, s.OnBoard)).ToList(),
+        match.Seats.Select(s => new SeatView(s.Index, s.Name, s.IsBot, s.Occupied, s.Score)).ToList(),
         match.CurrentSeat,
         match.Roll,
         match.DiceInHand,
@@ -48,11 +46,9 @@ public sealed record MatchView(
             .ToList(),
         match.CanBank,
         match.Rules.Target,
-        match.Rules.OpeningThreshold,
         match.TurnNumber,
         match.Winner,
         match.Ending.ToString(),
-        match.FinalTurnFor,
         match.Turn.Select(Event).ToList(),
         match.LastTurn.Select(Event).ToList());
 

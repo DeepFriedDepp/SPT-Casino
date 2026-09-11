@@ -67,7 +67,7 @@ public class BotTests
     public void BanksWhenBankingWins()
     {
         var bot = new FarkleBot(BotCharacter.Gambler);
-        var match = Ready(new FarkleRules(Target: 2000, OpeningThreshold: 500), botSeat: 0);
+        var match = Ready(new FarkleRules(Target: 2000), botSeat: 0);
 
         BankFifteenHundred(match);
         match.RollDice(MatchTests.Stacked(2, 2, 3, 3, 4, 6)); // Alice's opponent farkles
@@ -84,69 +84,23 @@ public class BotTests
         Assert.True(second.Bank, second.Reason);
     }
 
+    /// <summary>
+    /// With no threshold, a lone 5 at the start of a turn is a legal bank of 50. Nobody
+    /// with a dial above zero does that; even the Rock rolls five dice at 50.
+    /// </summary>
     [Fact]
-    public void OnTheLastTurnBehindItNeverBanksShort()
+    public void NobodyBanksFiftyWithFiveDiceToRoll()
     {
-        var bot = new FarkleBot(BotCharacter.Rock);
-        var match = Ready(new FarkleRules(Target: 1000, OpeningThreshold: 500), botSeat: 1);
+        foreach (var character in BotCharacter.All)
+        {
+            var bot = new FarkleBot(character);
+            var match = Ready(botSeat: 0);
+            match.RollDice(MatchTests.Stacked(5, 2, 3, 4, 6, 6));
 
-        // Alice banks 1000; the bot's last turn.
-        match.RollDice(MatchTests.Stacked(1, 1, 1, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        match.Bank();
-        Assert.Equal(1, match.FinalTurnFor);
+            var decision = bot.Decide(match);
 
-        // 600 would be bankable by the threshold and is useless. Even the Rock rolls on.
-        match.RollDice(MatchTests.Stacked(6, 6, 6, 2, 3, 4));
-        var decision = bot.Decide(match);
-
-        Assert.False(decision.Bank, decision.Reason);
-        Assert.Contains("last turn", decision.Reason);
-    }
-
-    [Fact]
-    public void OnTheLastTurnAheadItBanksTheWin()
-    {
-        var bot = new FarkleBot(BotCharacter.Gambler);
-        var match = Ready(new FarkleRules(Target: 1000, OpeningThreshold: 500), botSeat: 1);
-
-        match.RollDice(MatchTests.Stacked(1, 1, 1, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        match.Bank();
-
-        // 2500 beats 1000. Even the Gambler takes it.
-        match.RollDice(MatchTests.Stacked(2, 2, 2, 5, 5, 5));
-        var decision = bot.Decide(match);
-
-        Assert.True(decision.Bank, decision.Reason);
-    }
-
-    [Fact]
-    public void ATieOnTheLastTurnIsNotBanked()
-    {
-        var bot = new FarkleBot(BotCharacter.Rock);
-        var match = Ready(new FarkleRules(Target: 1000, OpeningThreshold: 500), botSeat: 1);
-
-        match.RollDice(MatchTests.Stacked(1, 1, 1, 2, 3, 4));
-        match.KeepDice([0, 1, 2]);
-        match.Bank();
-
-        match.RollDice(MatchTests.Stacked(1, 1, 1, 2, 3, 4));
-        var decision = bot.Decide(match);
-
-        Assert.False(decision.Bank, decision.Reason);
-    }
-
-    [Fact]
-    public void BeforeTheBoardItCannotChooseToBankShort()
-    {
-        var bot = new FarkleBot(BotCharacter.Rock);
-        var match = Ready(botSeat: 0);
-        match.RollDice(MatchTests.Stacked(1, 5, 2, 3, 4, 6));
-
-        var decision = bot.Decide(match);
-
-        Assert.False(decision.Bank);
+            Assert.False(decision.Bank, character.Name + ": " + decision.Reason);
+        }
     }
 
     /// <summary>
@@ -241,8 +195,8 @@ public class BotTests
     }
 
     /// <summary>
-    /// How often a character banks, over a spread of positions: on the board, a turn score
-    /// from 100 to 1,500, two to six dice in hand, and a roll showing one scoring 5 and
+    /// How often a character banks, over a spread of positions: a turn score from 100 to
+    /// 1,500, two to six dice in hand, and a roll showing one scoring 5 and
     /// nothing else. The decision is deterministic, so the spread is what makes this a
     /// rate rather than one answer repeated.
     /// </summary>
@@ -257,7 +211,7 @@ public class BotTests
             for (var dice = 2; dice <= 6; dice++)
             {
                 var match = Ready(botSeat: 0);
-                match.Force(turnScore, dice, onBoard: true);
+                match.Force(turnScore, dice);
 
                 var faces = new List<int> { 5 };
                 faces.AddRange(Enumerable.Repeat(2, dice - 1).Select((_, i) => i % 2 == 0 ? 2 : 3));

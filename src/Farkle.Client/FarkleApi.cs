@@ -40,10 +40,10 @@ namespace Farkle.Client
         /// means nothing has moved. PascalCase keys, like every body in the casino: SPT
         /// matches case-sensitively and a lowercase key binds to nothing.
         /// </summary>
-        internal static JObject Open(long stake, bool vsBot, string bot) =>
+        internal static JObject Open(long stake, int target, bool vsBot, string bot) =>
             Post(
                 "/farkle/open",
-                "{\"Stake\":" + Num(stake) + ",\"VsBot\":" + (vsBot ? "true" : "false")
+                "{\"Stake\":" + Num(stake) + ",\"Target\":" + Num(target) + ",\"VsBot\":" + (vsBot ? "true" : "false")
                 + ",\"Bot\":\"" + Escape(bot ?? string.Empty) + "\"}");
 
         internal static JObject Join(string tableId) =>

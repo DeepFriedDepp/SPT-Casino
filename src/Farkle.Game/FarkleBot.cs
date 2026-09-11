@@ -12,8 +12,8 @@ namespace Farkle.Game;
 /// to roll one more die; low greed sweeps up every point it sees.
 /// </param>
 /// <param name="Patience">
-/// A floor under what it will bank, as a share of twice the opening threshold. Some
-/// players will not stop for 300; some stop the moment they clear the line.
+/// A floor under what it will bank, as a share of 1,000. Some players will not stop for
+/// 300; some take the first fifty they see.
 /// </param>
 /// <param name="Steadiness">How little the run of the game reaches it. At 1, nothing does.</param>
 public sealed record BotDials(double Risk, double Greed, double Patience, double Steadiness)
@@ -109,10 +109,9 @@ public sealed record BotDecision(IReadOnlyList<int> Keep, bool Bank, double Seco
 ///
 /// ## The overrides, which are what a threshold bot lacks
 ///
-/// The score decides some turns before the dice do. If banking now wins, bank. If this is
-/// the one last turn after the opponent passed the target, banking anything short of
-/// their score loses, so it is not on the menu. And an opponent one strong turn from
-/// the target pushes the risk dial up, because banking 350 now hands them the game.
+/// The score decides some turns before the dice do. If banking now wins, bank. And an
+/// opponent one strong turn from the target pushes the risk dial up, because banking 350
+/// now hands them the game.
 ///
 /// Every decision is written to the log with its numbers, because a seat that silently
 /// does things is untestable and unwatchable.
@@ -163,18 +162,17 @@ public sealed class FarkleBot(BotCharacter character, IGameLog? log = null)
         var them = match.Other(me.Index);
         var dials = Current;
         var risk = dials.Risk;
-        var finalTurn = match.FinalTurnFor == me.Index;
 
         // An opponent one good turn from the line: banking small hands them the game, so
         // the risk dial goes up in proportion to how close they are.
         var gap = match.Rules.Target - them.Score;
 
-        if (!finalTurn && gap > 0 && gap < Endgame)
+        if (gap > 0 && gap < Endgame)
         {
             risk += (1 - risk) * (1 - (double)gap / Endgame) * 0.6;
         }
 
-        var floor = dials.Patience * 2 * match.Rules.OpeningThreshold;
+        var floor = dials.Patience * 1_000;
         var options = new List<Option>();
 
         foreach (var keep in match.LegalKeeps)
@@ -193,18 +191,9 @@ public sealed class FarkleBot(BotCharacter character, IGameLog? log = null)
             // ---- bank ----
             double bank;
 
-            if (!(me.OnBoard || after >= match.Rules.OpeningThreshold))
+            if (total >= match.Rules.Target)
             {
-                bank = double.NegativeInfinity;
-            }
-            else if (finalTurn)
-            {
-                // Beating them is the only bank worth anything. A tie loses: they set the
-                // mark and this seat had its turn to pass it.
-                bank = total > them.Score ? double.PositiveInfinity : double.NegativeInfinity;
-            }
-            else if (total >= match.Rules.Target)
-            {
+                // Banking wins. Nothing else is on the menu.
                 bank = double.PositiveInfinity;
             }
             else if (hotDice)
@@ -221,12 +210,6 @@ public sealed class FarkleBot(BotCharacter character, IGameLog? log = null)
             var farkle = Math.Clamp(Odds.FarkleChance(remaining) * (1.5 - risk), 0.005, 0.99);
             var gain = (0.5 + dials.Greed) * Odds.MeanBestKeep(remaining);
             var roll = (1 - farkle) * (after + gain);
-
-            if (finalTurn && total <= them.Score)
-            {
-                // Behind with the last turn: nothing to lose by rolling, everything by not.
-                roll = Math.Max(roll, after + gain);
-            }
 
             options.Add(new Option(keep, true, bank, remaining));
             options.Add(new Option(keep, false, roll, remaining));
@@ -249,8 +232,7 @@ public sealed class FarkleBot(BotCharacter character, IGameLog? log = null)
             + (best.Bank
                 ? $"banks {match.TurnScore + best.Keep.Value.Points:N0}"
                 : $"rolls {best.Remaining} at {match.TurnScore + best.Keep.Value.Points:N0}")
-            + $" -- {Describe(best)} vs {(runnerUp is null ? "nothing" : Describe(runnerUp))}, risk {risk:0.00}"
-            + (finalTurn ? ", last turn" : string.Empty);
+            + $" -- {Describe(best)} vs {(runnerUp is null ? "nothing" : Describe(runnerUp))}, risk {risk:0.00}";
 
         if (_log.Enabled)
         {

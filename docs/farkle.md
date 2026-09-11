@@ -7,9 +7,12 @@ which is the one thing that makes this table smaller than shared poker or shared
 blackjack rather than larger.
 
 **It plays, for real roubles, as of 2026-09-11.** Read "Current state" before anything
-else in this file. Two seats, a race to 10,000 with a 500 opening threshold, a fixed
-stake each and the winner paid both -- against a friend over the casino socket, or
-against one of four measured bot characters.
+else in this file. Two seats, a race to a target picked when the table opens (1,000 to
+10,000), a fixed stake each and the winner paid both -- against a friend over the casino
+socket, or against one of four measured bot characters. **Anything set aside may be
+banked, and the first to the target wins on the spot.** Both the standard 500 opening
+threshold and the standard last-turn rule were built first and removed on 2026-09-11 at
+the owner's call; see "The four decisions".
 
 `docs/memory/2026-09-11-farkle-phase1.md` is what the investigation found,
 `2026-09-11-farkle-reference-not-source.md` is why no line of any public Farkle repo is in
@@ -161,9 +164,8 @@ The dials, each 0 to 1, with what they do to step 3:
   This is the dial that produces "keeps rolling on 800 with two dice" and "banks 350".
 - **Greed** -- how strongly it prefers keeping fewer dice to roll more. High greed leaves
   the lone 5 on the table; low greed sweeps up every point it sees.
-- **Patience** -- a floor on the turn score it will bank below, expressed as a multiple
-  of the 500 opening threshold. Some players will not stop for 300; some stop the
-  moment they clear the line.
+- **Patience** -- a floor on the turn score it will bank below, as a share of 1,000.
+  Some players will not stop for 300; some take the first fifty they see.
 - **Steadiness** -- how little the game state reaches them. See mood, below.
 
 Named characters are landmarks on those dials, not separate code -- poker's cast is the
@@ -177,17 +179,16 @@ If two characters' tables look alike, one of them is not a character.
 A bot with a fixed stopping rule plays the last turn of a race exactly like the first,
 and that is the tell. Two overrides, both computed from the score, both unarguable:
 
-- **The opponent has banked past the target** and this is the last turn. There is no
-  bank below what wins. Roll until the turn score covers the gap or the dice farkle;
-  the dials do not apply.
+- **Banking now wins.** The turn's points plus the score reach the target, so bank;
+  nothing else is on the menu. First there wins, so there is no "last turn" to reason
+  about -- that rule went out with the threshold, see "The four decisions".
 - **The opponent is within one strong turn of the target** (say 1,500 or less to go).
   Banking a small turn now hands them the game; the bot's Risk is pushed up in
   proportion to how close they are.
 
-And one that is a rule of the game rather than a strategy: the **opening threshold**. A
-player is not on the board until a single turn banks 500 or more; before that, every
-turn is roll-until-500-or-farkle and the bot has no decision. That rule is decision #3's
-to confirm.
+There is no opening threshold any more, so every keep is a decision, including the first
+of the turn: a lone 5 with five dice to roll is a legal bank of 50, and
+`NobodyBanksFiftyWithFiveDiceToRoll` pins that no character takes it.
 
 ### Mood
 
@@ -255,8 +256,13 @@ fresh session does not reopen them.
    Leaving a table nobody joined is not a forfeit; the stake comes straight back. Against
    the house the human's stake is real and the bot's is notional: a win pays two stakes,
    a loss pays nothing, and leaving mid-match loses the stake to the house.
-3. **Race to 10,000, 500 opening threshold.** The first seat past 10,000 does not win on
-   the spot: the other gets one last turn, and a tie goes to the seat that set the mark.
+3. **A race to a target chosen per table, first there wins.** Revised the same day from
+   "10,000 with a 500 opening threshold and a last turn": the owner found the threshold
+   silly in play -- a player with 250 set aside had no way to keep it -- and asked for
+   tables at 1,000, 3,000, 5,000 and so on, "whoever gets to that score first wins the
+   wager". So `FarkleRules.Targets` is 1,000 / 2,000 / 3,000 / 5,000 / 10,000, the target
+   is fixed at open like the stake, anything set aside may be banked, and the first seat
+   to bank at or past the target wins outright. No last turn, no tie to break.
 4. **The dial-driven bot**, as designed above, measured with `tools/Farkle.Console`.
 
 **Still open, deliberately:** the exact dial values per character. The cast below is a
@@ -267,14 +273,14 @@ measured starting point, not a finished one.
 `dotnet run --project tools/Farkle.Console -- --matches 300` plays every pair 300 times
 and prints how often each character banks **when it had the choice** -- on the board, a
 keep made, dice still in hand -- by how many dice it would roll on with. 2026-09-11,
-seed 1:
+seed 1, after the threshold came out (the floor is a share of 1,000 now):
 
 | | 1 die | 2 | 3 | 4 | 5 | all | avg bank | farkle% | wins |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Kolya (Rock) | 91% | 95% | 95% | 13% | 2% | 54% | 649 | 16% | 51% |
-| Sveta (Grinder) | 94% | 43% | 26% | 5% | 1% | 27% | 899 | 40% | 51% |
-| Timur (Tourist) | 94% | 87% | 34% | 8% | 2% | 42% | 747 | 26% | 52% |
-| Vanya (Gambler) | 50% | 33% | 20% | 2% | 0% | 18% | 1,194 | 57% | 46% |
+| Kolya (Rock) | 100% | 100% | 100% | 12% | 2% | 54% | 626 | 10% | 52% |
+| Sveta (Grinder) | 99% | 43% | 25% | 4% | 1% | 26% | 891 | 37% | 52% |
+| Timur (Tourist) | 100% | 93% | 32% | 7% | 1% | 42% | 715 | 21% | 51% |
+| Vanya (Gambler) | 50% | 32% | 19% | 2% | 0% | 17% | 1,197 | 56% | 45% |
 
 Two things the first two runs taught, both now in `FarkleBot.cs` beside the numbers:
 
@@ -321,7 +327,7 @@ mid-match is the forfeit.
 
 | Piece | State |
 | --- | --- |
-| `src/Farkle.Game` | `Scoring`, `Dice`, `Odds`, `FarkleMatch` (seats, turns, threshold, last turn, tie, yield, forfeit), `MatchView`, `FarkleBot` with four characters |
+| `src/Farkle.Game` | `Scoring`, `Dice`, `Odds`, `FarkleMatch` (seats, turns, per-table target, first-there-wins, yield, forfeit), `MatchView`, `FarkleBot` with four characters |
 | `tests/Farkle.Game.Tests` | 121 tests, green: scoring, odds, match rules, bot overrides and character separation |
 | `src/Farkle.Server` | `SharedFarkleService` / `Store` / `Callbacks` / `Router`, `Bank`, `Escrow` (`escrow-farkle.json`), `FarkleSync` item event. Nine routes on `/farkle/*` |
 | `tests/Farkle.Server.Tests` | 24 tests, green: the money invariants including the forfeit rule, stranded refunds, the quiet and absent seats, and a concurrency probe proven to fail ungated |

@@ -63,8 +63,8 @@ public class MoneyInvariantTests
         random,
         new QuietLog());
 
-    private static OpenTableRequest Open(bool vsBot = false, long stake = Stake, string bot = "") =>
-        new() { Stake = stake, VsBot = vsBot, Bot = bot };
+    private static OpenTableRequest Open(bool vsBot = false, long stake = Stake, string bot = "", int target = 10_000) =>
+        new() { Stake = stake, VsBot = vsBot, Bot = bot, Target = target };
 
     private static ItemEventRouterResponse Output() => new();
 
@@ -136,6 +136,43 @@ public class MoneyInvariantTests
 
         Assert.False(opened.Ok);
         Assert.Equal(0, _bank.Debits);
+        Assert.Equal(0, _escrow.Held);
+    }
+
+    [Theory]
+    [InlineData(500)]
+    [InlineData(4_000)]
+    [InlineData(0)]
+    public async Task ATargetOffTheListIsRefusedBeforeAnythingMoves(int target)
+    {
+        var opened = await _service.OpenAsync(Open(target: target), _alice, Output());
+
+        Assert.False(opened.Ok);
+        Assert.Contains("1,000", opened.Error);
+        Assert.Equal(0, _bank.Debits);
+        Assert.Equal(0, _escrow.Held);
+        Assert.Empty(_store.All);
+    }
+
+    /// <summary>A short race ends at its own target, is listed with it, and pays like any other.</summary>
+    [Fact]
+    public async Task AShortRaceEndsAtItsTargetAndPaysTheWinner()
+    {
+        await _service.OpenAsync(Open(target: 1_000), _alice, Output());
+
+        var listed = Assert.Single(_service.List());
+        Assert.Equal(1_000, listed.Target);
+
+        await _service.JoinAsync(TableId(), _bob, Output());
+        var final = await PlayToTheEnd();
+
+        Assert.Equal("Finished", final.Match!.Phase);
+        Assert.Equal(1_000, final.Match.Target);
+
+        var winner = final.Match.Seats[final.Match.Winner!.Value];
+        Assert.True(winner.Score >= 1_000, $"winner banked {winner.Score}");
+        Assert.True(final.Match.Seats[1 - final.Match.Winner.Value].Score < 1_000);
+        Assert.Equal(0, _bank.Moved);
         Assert.Equal(0, _escrow.Held);
     }
 

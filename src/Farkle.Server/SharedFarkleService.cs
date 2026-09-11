@@ -91,8 +91,6 @@ public class SharedFarkleService(
     private static readonly IReadOnlyList<double> FarkleChances =
         Enumerable.Range(1, Dice.InPlay).Select(n => Math.Round(Odds.FarkleChance(n) * 100, 2)).ToList();
 
-    private static readonly FarkleRules Rules = new();
-
     // ---- the gated entrance --------------------------------------------------------
 
     /// <summary>Tables waiting for a second human. No gate: reads a snapshot, moves nothing.</summary>
@@ -258,8 +256,7 @@ public class SharedFarkleService(
             Balance = known ? bank.GetBalance(sessionId, Wallet.Roubles) : 0,
             MinStake = WalletInfo.For(Wallet.Roubles).MinStake,
             MaxStake = WalletInfo.For(Wallet.Roubles).MaxStake,
-            Target = Rules.Target,
-            OpeningThreshold = Rules.OpeningThreshold,
+            Targets = FarkleRules.Targets,
             Scoring = ScoringLines,
             FarkleChance = FarkleChances,
             Bots = BotCharacter.All.Select(c => c.Name).ToList(),
@@ -285,6 +282,12 @@ public class SharedFarkleService(
             return FarkleResponse.Failed($"A match is played for {info.MinStake:N0} to {info.MaxStake:N0} roubles.");
         }
 
+        if (!FarkleRules.Allows(request.Target))
+        {
+            return FarkleResponse.Failed(
+                $"A match is played to {string.Join(", ", FarkleRules.Targets.Select(t => t.ToString("N0")))}.");
+        }
+
         var stake = (int)request.Stake;
 
         // A row left by a server that died mid-match is theirs, and it goes back before a
@@ -297,7 +300,7 @@ public class SharedFarkleService(
         }
 
         var hostName = profiles.NameOf(sessionId) ?? "Seat 0";
-        var match = new FarkleMatch(Rules, GameLog.To(log.Detail));
+        var match = new FarkleMatch(new FarkleRules(request.Target), GameLog.To(log.Detail));
         match.Sit(0, hostName);
 
         FarkleBot? bot = null;
@@ -330,7 +333,7 @@ public class SharedFarkleService(
         await profiles.SaveAsync(sessionId);
 
         log.Info(
-            $"{hostName} opened table {tableId} for {stake:N0} roubles"
+            $"{hostName} opened table {tableId} for {stake:N0} roubles to {request.Target:N0}"
             + (bot is null ? ", waiting for an opponent" : $" against {bot.Character.Name}"));
 
         return View(table, sessionId) with { Note = refunded };
@@ -769,7 +772,7 @@ public class SharedFarkleService(
     // ---- odds and ends ---------------------------------------------------------------
 
     private static FarkleSummary Summarise(FarkleTable table) =>
-        new(table.Id, table.HostName, table.Stake, table.Wallet.ToString(), table.VsBot, table.Match.Phase.ToString());
+        new(table.Id, table.HostName, table.Stake, table.Wallet.ToString(), table.Match.Rules.Target, table.VsBot, table.Match.Phase.ToString());
 
     private static void Touch(FarkleTable table, MongoId sessionId) =>
         table.LastSeenUtc[sessionId.ToString()] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();

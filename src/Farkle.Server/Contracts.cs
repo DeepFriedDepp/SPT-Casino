@@ -28,6 +28,12 @@ public record OpenTableRequest : IRequestData
     public long Stake { get; set; }
 
     /// <summary>
+    /// First to this wins. One of <c>FarkleRules.Targets</c> -- 1,000 to 10,000 -- refused
+    /// otherwise. Fixed for the table's life, like the stake.
+    /// </summary>
+    public int Target { get; set; } = 10_000;
+
+    /// <summary>
     /// Against the house's regular rather than waiting for a friend. Decided here, once:
     /// a table is human against human or human against a bot, never both, and it does
     /// not change after opening.
@@ -68,7 +74,7 @@ public record FarkleSyncAction : BaseInteractionRequestData;
 // ---- responses -------------------------------------------------------------------------
 
 /// <summary>One open table, as the lobby lists it.</summary>
-public sealed record FarkleSummary(string Id, string HostName, int Stake, string Wallet, bool VsBot, string Phase);
+public sealed record FarkleSummary(string Id, string HostName, int Stake, string Wallet, int Target, bool VsBot, string Phase);
 
 /// <summary>What the lobby is handed.</summary>
 public record TablesResponse
@@ -143,9 +149,8 @@ public record PingResponse
 
     public int MaxStake { get; init; }
 
-    public int Target { get; init; }
-
-    public int OpeningThreshold { get; init; }
+    /// <summary>The targets a table may be opened at, for the panel's picker.</summary>
+    public IReadOnlyList<int> Targets { get; init; } = [];
 
     public IReadOnlyList<ScoreLine> Scoring { get; init; } = [];
 
