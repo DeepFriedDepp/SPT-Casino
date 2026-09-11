@@ -6,14 +6,14 @@ points are gone. **Human opponent OR a bot, never both** -- decided at table cre
 which is the one thing that makes this table smaller than shared poker or shared
 blackjack rather than larger.
 
-**It is not a game yet.** Read "Current state" before anything else in this file. The
-scoring is written and tested, the server answers a ping, the lobby has a tile, and the
-panel says plainly that there is nothing to play. Phase 2 -- the actual game -- is
-deliberately unwritten until the four decisions under "Open decisions" have answers.
+**It plays, for real roubles, as of 2026-09-11.** Read "Current state" before anything
+else in this file. Two seats, a race to 10,000 with a 500 opening threshold, a fixed
+stake each and the winner paid both -- against a friend over the casino socket, or
+against one of four measured bot characters.
 
-The work order is the source for what "done" means; `docs/memory/2026-09-11-farkle-phase1.md`
-is what Phase 0 and 1 found, and `docs/memory/2026-09-11-farkle-reference-not-source.md`
-is why no line of any public Farkle repo is in here.
+`docs/memory/2026-09-11-farkle-phase1.md` is what the investigation found,
+`2026-09-11-farkle-reference-not-source.md` is why no line of any public Farkle repo is in
+here, and `2026-09-11-farkle-phase2.md` is what landed when the four decisions were taken.
 
 **Update "Current state" when you finish a piece of work.**
 
@@ -90,17 +90,25 @@ has the same exclusive bound -- **whoever writes the dice animation must not rol
 display die that way either.** `DiceTests.AllSixFacesComeUp` is the test that would have
 caught all three.
 
-There is no shared RNG utility on the server side today. Roulette and Slots each carry an
-identical `IRandomSource` / `RandomSource` (`Random.Shared`) pair; Poker and Blackjack use
-`new Random(...)` inline. Farkle's would be the third copy, and `CLAUDE.md`'s rule is to
-extract at the second. **When Phase 2 adds the roll route, put `IRandomSource` in
-`Casino.Server` beside `Gates.cs` and have Farkle take it from there.** Not done yet
-because nothing in `Farkle.Server` rolls and an injected dependency nothing uses is noise.
+On the server, Farkle takes `Casino.Server.IRandomSource` -- extracted into
+`src/Casino.Server/RandomSource.cs` with the roll route, because Roulette and Slots
+already carried identical copies and `CLAUDE.md`'s rule is to extract at the second case.
+Those two copies are left in place until somebody is in those files for another reason;
+they are in different namespaces and nothing collides. The tests hand the service a
+`FakeRandom` that returns **one** seeded `Random` across every call -- a fresh
+`Random(seed)` per roll makes every six-dice roll identical and a match that never ends.
 
 ## The bot
 
-Written as a design, not built. It is here because the work order asked for the same
-level of thought poker's bots got and because the thing not to do is easy to state.
+Built as designed below, in `Farkle.Game.FarkleBot`, and measured with
+`tools/Farkle.Console` -- see "The cast, measured". The design is kept here in full
+because it is the reasoning the numbers hang off, and because the thing not to do is easy
+to state.
+
+The server plays a bot's whole turn inside the request that ended the human's, and the
+panel replays it from the view's `LastTurn` events. The engine asks keep and bank as two
+steps; the bot answers them as one, so `FarkleTable.BotWillBank` carries the answer from
+the keep to the next `Rolling` phase.
 
 ### What was looked at, and what it settled
 
@@ -232,74 +240,104 @@ Two places Farkle differs from blackjack, found by reading rather than guessing:
   before the first roll, and a player who stands up mid-match **forfeits**. That needs
   saying in the rules the panel shows, because it is real money if decision #2 says so.
 
-## Open decisions
+## The four decisions, taken 2026-09-11
 
-Not decided here. They are the repo owner's, and Phase 2 is not written until they are.
-Recommendations follow each, with the reason; disagree with any of them and the design
-above still holds.
+All four recommendations were confirmed as written by the repo owner. Recorded here so a
+fresh session does not reopen them.
 
-1. **Player count for human mode.** *Recommend two.* It is what the transport has been
-   proven against (`2026-09-07-first-live-run.md` is a two-player match), and a
-   human-or-bot table is a two-seat object either way. Free-for-all Farkle with more
-   seats is a real variant; it is also a lobby, a turn ring and a forfeit rule for N
-   players, none of which exists yet for any table.
-2. **Stakes.** *Recommend a fixed match wager, per player, in roubles, escrowed at
-   sit-down; the winner is paid both.* This is blackjack's bet-then-resolve shape
-   stretched over one match rather than one round, and it keeps every existing money
-   rule intact: each player's wager leaves their own stash, is recorded against their
-   own session in `escrow-farkle.json`, and nothing is pooled in real currency until
-   settlement. A no-money score race is the other honest answer and removes `Bank.cs`
-   and `Escrow.cs` from this table entirely -- but it also makes Farkle the one table in
-   the casino where nothing is at stake, and the casino is built around the stake.
-   Whichever way this goes, **write `MoneyInvariantTests` before the settlement**, as
-   Roulette did.
-3. **Win condition.** *Recommend a race to 10,000 with a 500 opening threshold.* 10,000
-   is the majority rule set and the one two of the three reference repos use; 5,000 is a
-   short game, and a short game with money on it is closer to a coin flip than a game.
-   The threshold matters more than it looks: without it the first turn is a free 50, and
-   with it the bot's first-turn logic is a rule rather than a decision.
-4. **AI opponent.** *Recommend the design above.* Dial-driven around the computed
-   break-even line, with the endgame override and mood. Build the measurement harness
-   (a console tool, like `tools/Poker.Console`) at the same time as the bot, not after;
-   poker's characters all had to be widened after measuring and Farkle's will too.
+1. **Two players.** A table is a two-seat object: human and human, or human and one bot.
+   Free-for-all Farkle with more seats is a real variant and is out of scope -- it needs
+   its own lobby, turn ring and forfeit design.
+2. **A fixed match wager, per player, in roubles, escrowed at sit-down; the winner is
+   paid both.** 10,000 to 1,000,000 a seat. **The forfeit rule**: standing up mid-match
+   pays both stakes to the player who stayed -- its own named rule in
+   `SharedFarkleService` and its own case in `MoneyInvariantTests`, not an inference.
+   Leaving a table nobody joined is not a forfeit; the stake comes straight back. Against
+   the house the human's stake is real and the bot's is notional: a win pays two stakes,
+   a loss pays nothing, and leaving mid-match loses the stake to the house.
+3. **Race to 10,000, 500 opening threshold.** The first seat past 10,000 does not win on
+   the spot: the other gets one last turn, and a tie goes to the seat that set the mark.
+4. **The dial-driven bot**, as designed above, measured with `tools/Farkle.Console`.
+
+**Still open, deliberately:** the exact dial values per character. The cast below is a
+measured starting point, not a finished one.
+
+## The cast, measured
+
+`dotnet run --project tools/Farkle.Console -- --matches 300` plays every pair 300 times
+and prints how often each character banks **when it had the choice** -- on the board, a
+keep made, dice still in hand -- by how many dice it would roll on with. 2026-09-11,
+seed 1:
+
+| | 1 die | 2 | 3 | 4 | 5 | all | avg bank | farkle% | wins |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Kolya (Rock) | 91% | 95% | 95% | 13% | 2% | 54% | 649 | 16% | 51% |
+| Sveta (Grinder) | 94% | 43% | 26% | 5% | 1% | 27% | 899 | 40% | 51% |
+| Timur (Tourist) | 94% | 87% | 34% | 8% | 2% | 42% | 747 | 26% | 52% |
+| Vanya (Gambler) | 50% | 33% | 20% | 2% | 0% | 18% | 1,194 | 57% | 46% |
+
+Two things the first two runs taught, both now in `FarkleBot.cs` beside the numbers:
+
+- **Patience is what separates a small-banker from a stopper.** The first tuning took
+  Timur's patience off to make him "stop the moment he clears the line", and he became
+  Kolya's twin -- 94% and 95% with three dice left. Put back, they separate at 34% and 95%.
+- **Greed shows in which dice are kept, not in the bank rate.** Timur sweeps the lone 5
+  where Sveta leaves it to roll one more die; the bank table cannot see that. If Greed is
+  ever retuned, add a keep-choice column to the harness first.
+
+The characters win between 46% and 52% of their matches against each other, which is
+the right shape: none of them is a bad player, they are different players. A character
+whose row matches another's is one character with two names -- widen a dial and measure
+again.
 
 ## Verifying
 
 ```
 & 'C:\Users\Jonasty\AppData\Local\Microsoft\dotnet\dotnet.exe' test tests\Farkle.Game.Tests\Farkle.Game.Tests.csproj
-& 'C:\Users\Jonasty\AppData\Local\Microsoft\dotnet\dotnet.exe' build src\Farkle.Server\Farkle.Server.csproj -c Release
+& 'C:\Users\Jonasty\AppData\Local\Microsoft\dotnet\dotnet.exe' test tests\Farkle.Server.Tests\Farkle.Server.Tests.csproj
+& 'C:\Users\Jonasty\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project tools\Farkle.Console -- --matches 300
+& 'C:\Users\Jonasty\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project tools\Farkle.Console -- --watch --a Kolya --b Vanya
 dotnet build src\Casino.Client\Casino.Client.csproj -c Release "-p:SPTPath=C:\SPT"
 ```
 
-In the game: the lobby shows a fifth tile, FARKLE, two dice showing a 1 and a 5. That
-tile is the one piece of art in the casino that is drawn by a script rather than by hand
--- `python tools/draw-farkle-tile.py` regenerates `src/Casino.Client/assets/tile-farkle.png`
-at the other tiles' 320x320, so it can be changed without an artist. It needs Pillow.
-Opening the tile fetches `/farkle/ping` and prints the scoring sheet
-and the six farkle odds from the server. If the panel says the server is not answering,
-`Farkle.Server.dll` is not in `user/mods/Casino` -- `scripts/casino/pack.ps1` puts it
-there.
+**The concurrency test is proven to fail without the gate**, as `CLAUDE.md` requires. With
+the `tables.EnterAsync` line in `LeaveAsync` and the `sessions.EnterAsync` line in the
+refund branch of `LeaveCoreAsync` replaced by nothing, a double-clicked LEAVE on an
+unjoined table refunds the stake twice and `TwoLeavesOfAnUnjoinedTableRefundOnce` fails
+with `Expected: 1, Actual: 2` on the credit count. Restored, 24/24. The run is quoted in
+`docs/memory/2026-09-11-farkle-phase2.md`.
+
+In the game: the lobby's fifth tile opens the table. The lobby half lists tables waiting
+for an opponent, takes a stake, and offers OPEN A TABLE FOR A FRIEND or PLAY THE HOUSE
+against a named regular. Sitting down takes the stake at once and tells the running game
+so the counter agrees with the server. In a match, tap dice to pick a keep -- only dice
+the server says may be kept light up -- then SET ASIDE, then ROLL or BANK. The other
+seat's turn is replayed event by event rather than appearing as a score change. LEAVE
+mid-match is the forfeit.
 
 ## Current state
 
-**2026-09-11 -- Phase 0 and Phase 1 done. Phase 2 not started.**
+**2026-09-11 -- Phase 2 landed. It plays. Not yet run inside a live SPT server.**
 
 | Piece | State |
 | --- | --- |
-| `src/Farkle.Game` | `Scoring`, `Dice`, `Odds`, `IGameLog`. No turn, seat or match state |
-| `tests/Farkle.Game.Tests` | 81 tests, green. Scoring against the reference's cases plus the ones it lacks; odds pinned to the known fractions |
-| `src/Farkle.Server` | `/farkle/ping`, gated, returns the scoring table and odds. **No bank, no escrow, no item-event action, no RNG** -- all wait on decision #2 |
-| `src/Farkle.Client` | A panel that prints what ping returns and says the game is not built. Compiled into `Casino.Client` |
-| `Casino.Client` | Fifth `Games.All` entry, fifth shim, builds clean against `C:\SPT` |
+| `src/Farkle.Game` | `Scoring`, `Dice`, `Odds`, `FarkleMatch` (seats, turns, threshold, last turn, tie, yield, forfeit), `MatchView`, `FarkleBot` with four characters |
+| `tests/Farkle.Game.Tests` | 121 tests, green: scoring, odds, match rules, bot overrides and character separation |
+| `src/Farkle.Server` | `SharedFarkleService` / `Store` / `Callbacks` / `Router`, `Bank`, `Escrow` (`escrow-farkle.json`), `FarkleSync` item event. Nine routes on `/farkle/*` |
+| `tests/Farkle.Server.Tests` | 24 tests, green: the money invariants including the forfeit rule, stranded refunds, the quiet and absent seats, and a concurrency probe proven to fail ungated |
+| `src/Casino.Server/RandomSource.cs` | The shared `IRandomSource`, extracted at the third case. Roulette's and Slots' copies untouched |
+| `src/Farkle.Client` | The whole panel: lobby, stake, bot picker, match with clickable dice, opponent-turn replay, socket push plus a 4s poll. Compiled into `Casino.Client`, builds clean |
+| `tools/Farkle.Console` | The measurement harness and a narrated match |
 | `scripts/casino/pack.ps1` | Knows the fifth table. **Not run against a real install yet** |
-| Art | `tile-farkle.png`, drawn by `tools/draw-farkle-tile.py`. No table art yet; the panel is procedural |
 
-### Open items
+### What has not happened
 
-- Answer the four decisions above; then Phase 2.
-- Dice faces for the table itself, when there is a table. The tile script's `die()` is
-  the obvious starting point, and the display die must not use `Random.Range(1, 6)`.
-- When the roll route lands: extract `IRandomSource` into `Casino.Server` (see "Where the
-  RNG lives") rather than adding a third copy.
-- `Farkle.Server.Tests` does not exist yet. There is nothing to test that `Farkle.Game.Tests`
-  does not already cover; it appears with the first route that moves state.
+- **No live run.** Nothing here has been inside a running SPT server: not the routes,
+  not the item-event registration, not a push. Every other table's first live run found
+  something; expect this one to. `docs/memory/2026-09-07-first-live-run.md` is the shape
+  of what one run proves.
+- **The bot's thinking time is not used yet.** `BotDecision.Seconds` is computed and
+  logged; the panel replays a bot turn at fixed pauses. Wiring the two together is the
+  next thing that makes the bot feel like a person.
+- **Dial values are starting points.** Measured once. Re-measure after any change.
+- Dice faces on the table are drawn from `Textures.RoundedBox`; there is no table art.

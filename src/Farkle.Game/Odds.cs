@@ -20,12 +20,12 @@ public static class Odds
     /// die, 44.4% for two, 27.8% for three, 15.7% for four, 7.7% for five and 2.3% for
     /// six -- the test pins every one to its fraction.
     /// </summary>
-    public static double FarkleChance(int dice)
+    public static double FarkleChance(int dice) => Cached(FarkleChances, dice, n =>
     {
-        var (farkles, outcomes) = Enumerate(dice, roll => Scoring.IsFarkle(roll) ? 1 : 0);
+        var (farkles, outcomes) = Enumerate(n, roll => Scoring.IsFarkle(roll) ? 1 : 0);
 
         return (double)farkles / outcomes;
-    }
+    });
 
     /// <summary>
     /// What a roll of this many dice is worth on average if every point on the table is
@@ -36,11 +36,28 @@ public static class Odds
     /// roll, but it is the honest first number: against `turnScore x FarkleChance` it
     /// says whether a roll is worth making at all.
     /// </summary>
-    public static double MeanBestKeep(int dice)
+    public static double MeanBestKeep(int dice) => Cached(MeanKeeps, dice, n =>
     {
-        var (points, outcomes) = Enumerate(dice, roll => Scoring.BestKeep(roll)?.Value.Points ?? 0);
+        var (points, outcomes) = Enumerate(n, roll => Scoring.BestKeep(roll)?.Value.Points ?? 0);
 
         return (double)points / outcomes;
+    });
+
+    // Computed once each. The bot asks for these on every roll and six dice is 46,656
+    // outcomes, which is nothing once and something every decision.
+    private static readonly double?[] FarkleChances = new double?[Dice.InPlay + 1];
+    private static readonly double?[] MeanKeeps = new double?[Dice.InPlay + 1];
+
+    private static double Cached(double?[] table, int dice, Func<int, double> compute)
+    {
+        if (dice is < 1 or > Dice.InPlay)
+        {
+            throw new ArgumentOutOfRangeException(nameof(dice), dice, "One to six dice.");
+        }
+
+        // A benign race: two threads may compute the same value, and they compute the same
+        // value. A double? write is not torn on 64-bit, and either result is correct.
+        return table[dice] ??= compute(dice);
     }
 
     /// <summary>

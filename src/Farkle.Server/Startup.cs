@@ -22,9 +22,10 @@ public class Startup(FarkleLog log) : IOnLoad
 {
     public Task OnLoad()
     {
-        // When this table gets an item-event action, its Register() call goes HERE,
-        // ahead of the verbose gate -- see SlotMachine.Server.Startup for why a table
-        // whose banner is off still has to bind its own bodies.
+        // FIRST, and ahead of the verbose gate on purpose: without this every one of this
+        // table's item events throws inside SPT's JSON layer, before the router is
+        // reached. A table whose banner is switched off still has to bind its own bodies.
+        FarkleActions.Register();
 
         if (!log.Verbose)
         {
@@ -33,12 +34,14 @@ public class Startup(FarkleLog log) : IOnLoad
 
         log.Banner($"v{TableInfo.Version} loaded -- built for SPT {TableInfo.SptVersion}");
         log.Banner($"mod folder: {log.ModFolder}");
-        log.Banner("routes: POST /farkle/ping");
+        log.Banner("routes: POST /farkle/ping, /tables, /open, /join, /leave, /roll, /keep, /bank, /state");
+        log.Banner($"item event: {FarkleActions.Sync}, so the stash keeps up without a reload");
         log.Banner(
             $"six dice farkle {Odds.FarkleChance(6):P2} of the time, one die {Odds.FarkleChance(1):P2} -- "
             + "computed rather than measured");
 
-        log.Notice("THIS TABLE DOES NOT PLAY YET. The scoring is settled; the game is not.");
+        log.Notice("THIS TABLE PLAYS FOR REAL MONEY. Each player's stake leaves the stash at");
+        log.Notice("sit-down and the winner is paid both. Standing up mid-match forfeits yours.");
 
         log.Banner("verbose logging is ON -- every request will be logged.");
         log.Banner("turn it off in farkle.config.json once things are working.");

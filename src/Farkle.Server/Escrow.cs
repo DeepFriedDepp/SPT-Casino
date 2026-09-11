@@ -1,0 +1,144 @@
+using System.Collections.Concurrent;
+using System.Reflection;
+using SPTarkov.DI.Annotations;
+using SPTarkov.Server.Core.Helpers;
+using SPTarkov.Server.Core.Models.Common;
+using SPTarkov.Server.Core.Models.Utils;
+using SPTarkov.Server.Core.Utils;
+
+namespace Farkle.Server;
+
+/// <summary>
+/// Records the stake the table is holding for a player, and hands it back after a crash.
+///
+/// The table lives in memory on purpose -- a half-played match has no business
+/// surviving a restart. The **stake** is different: it is real currency that has left
+/// the stash the moment somebody sat down, and it stays out for the whole match. A
+/// server killed mid-match has taken two stakes and paid nobody, and without a record
+/// on disk the next session has no way to know it ever happened.
+///
+/// ## One row per session, one amount
+///
+/// Blackjack's escrow rather than poker's. What is owed to a player is exactly what was
+/// taken from them at sit-down; it never moves until the match settles, and then the
+/// row is released whether they won or lost. So there is nothing to accumulate and
+/// nothing to update, and a row already present when <see cref="Record"/> is called is
+/// a bug in the caller rather than a case to handle.
+///
+/// **Rows are replaced, never edited in place.** `Get` hands out the store's own object.
+/// See `CLAUDE.md`.
+///
+/// No legacy import: Farkle was never its own mod, so there is no old `escrow.json` to
+/// carry across.
+/// </summary>
+[Injectable(InjectionType.Singleton)]
+public class EscrowStore : IEscrowStore
+{
+    private const string FileName = "escrow-farkle.json";
+
+    private readonly ISptLogger<EscrowStore> _logger;
+    private readonly FileUtil _fileUtil;
+    private readonly JsonUtil _jsonUtil;
+    private readonly string _path;
+    private readonly Lock _writeLock = new();
+    private readonly ConcurrentDictionary<string, OutstandingStake> _held;
+
+    public EscrowStore(ISptLogger<EscrowStore> logger, FileUtil fileUtil, JsonUtil jsonUtil, ModHelper modHelper)
+    {
+        _logger = logger;
+        _fileUtil = fileUtil;
+        _jsonUtil = jsonUtil;
+
+        // Named folder rather than path: a *property* named Path shadows System.IO.Path
+        // inside the class and breaks every Path.Combine in it.
+        var folder = System.IO.Path.Combine(
+            modHelper.GetAbsolutePathToModFolder(Assembly.GetExecutingAssembly()),
+            "data");
+
+        _fileUtil.CreateDirectory(folder);
+        _path = System.IO.Path.Combine(folder, FileName);
+        _held = Load();
+
+        if (!_held.IsEmpty)
+        {
+            _logger.Info(
+                $"[Farkle] {_held.Count} player(s) had a stake on a table when the server last stopped -- "
+                + "each is paid back on next contact.");
+        }
+    }
+
+    public int Outstanding => _held.Count;
+
+    public OutstandingStake? Get(MongoId sessionId) =>
+        _held.TryGetValue(sessionId.ToString(), out var owed) ? owed : null;
+
+    /// <summary>Writes down what is about to be taken for a seat. Called once, before the debit.</summary>
+    public void Record(MongoId sessionId, Wallet wallet, int amount)
+    {
+        if (amount < 0)
+        {
+            amount = 0;
+        }
+
+        _held[sessionId.ToString()] = new OutstandingStake
+        {
+            Wallet = wallet.ToString(),
+            Amount = amount,
+            TakenAtUtc = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+        };
+
+        Flush();
+    }
+
+    public void Release(MongoId sessionId)
+    {
+        if (_held.TryRemove(sessionId.ToString(), out _))
+        {
+            Flush();
+        }
+    }
+
+    private void Flush()
+    {
+        lock (_writeLock)
+        {
+            try
+            {
+                var json = _jsonUtil.Serialize(_held, true);
+
+                if (json is null)
+                {
+                    // Writing nothing would truncate the file and lose every stake it was
+                    // holding, which is worse than failing to write at all.
+                    _logger.Error($"[Farkle] the outstanding stakes would not serialise -- {_path} left as it was.");
+                    return;
+                }
+
+                _fileUtil.WriteFile(_path, json);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"[Farkle] could not record the outstanding stake at {_path} -- {ex.Message}");
+            }
+        }
+    }
+
+    private ConcurrentDictionary<string, OutstandingStake> Load()
+    {
+        if (!_fileUtil.FileExists(_path))
+        {
+            return new ConcurrentDictionary<string, OutstandingStake>();
+        }
+
+        try
+        {
+            var loaded = _jsonUtil.Deserialize<Dictionary<string, OutstandingStake>>(_fileUtil.ReadFile(_path));
+            return new ConcurrentDictionary<string, OutstandingStake>(loaded ?? []);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"[Farkle] escrow file at {_path} is unreadable -- {ex.Message}");
+            return new ConcurrentDictionary<string, OutstandingStake>();
+        }
+    }
+}

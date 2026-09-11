@@ -29,3 +29,4 @@ it is worth nothing to the next session.
 | `2026-09-11-backport-from-upstream.md` | Reading upstream's fixes without cherry-picking them |
 | `2026-09-11-farkle-reference-not-source.md` | Farkle: two unlicensed repos are answer keys, not source. Which is right about what |
 | `2026-09-11-farkle-phase1.md` | Farkle Phase 0 and 1: built, verified, two work-order corrections, four open decisions |
+| `2026-09-11-farkle-phase2.md` | Farkle plays. The gate proof quoted, the forfeit rule tested, the cast measured. No live run yet |

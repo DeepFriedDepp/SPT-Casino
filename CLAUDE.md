@@ -1,8 +1,7 @@
 # SPT-Casino -- working notes for Claude
 
 **SPT Casino** is one mod: a single task-bar tab that opens a lobby, and five tables
-behind it -- **Blackjack**, **Poker**, **Roulette**, **Slots** and **Farkle**, the last
-of which is a scoring sheet and a health check so far, not a game. It was three
+behind it -- **Blackjack**, **Poker**, **Roulette**, **Slots** and **Farkle**. It was three
 separate mods until 2026-09-05, and the seams are still visible on purpose.
 
 **One folder each side.** `BepInEx/plugins/Casino` and `SPT_Runtime/user/mods/Casino`.
@@ -19,7 +18,7 @@ all four; everything specific lives next door and is much longer:
 | Poker | `docs/poker.md` | Plays for roubles. **Shared tables** since casino 1.2.0 |
 | Roulette | `docs/roulette.md` | Plays for roubles as of 2026-09-05. Ships inside the casino |
 | Slots | `docs/slots.md` | Roubles, dollars or euros. Shipped in casino 1.1.0, with AUTO and SPEED |
-| Farkle | `docs/farkle.md` | **Not a game yet.** Scoring engine tested, ping route, a panel that says so. Phase 2 waits on four decisions |
+| Farkle | `docs/farkle.md` | Roubles, a fixed stake each, winner takes both. Two humans over the socket, or one against a measured bot. Landed 2026-09-11, **no live run yet** |
 
 `docs/blackjack-readme.md` is Blackjack's public README, kept because it was the
 repo's front page before the merge.
@@ -101,9 +100,13 @@ carries exactly one `Textures`, one `ProfileSync`, one `CardView` and one `ChipV
 Before the extraction it shipped three, three, two and two.
 
 **Still duplicated, on the server side**: `Bank.cs`, `Escrow.cs`, `Abstractions.cs`,
-`ProfileGateway.cs`, `TableStore.cs` and `Wallets.cs` exist four times. Those are
-four tables loaded into one server process, so the duplication is real but
-harmless in a way the client's was not. See "Merging the servers".
+`ProfileGateway.cs` and `Wallets.cs` exist five times (`TableStore.cs` four; Farkle has
+no solo table). Those are five tables loaded into one server process, so the duplication
+is real but harmless in a way the client's was not. See "Merging the servers".
+
+**One thing did get extracted at the third case**: `IRandomSource` / `RandomSource` lives
+in `src/Casino.Server/RandomSource.cs` and Farkle takes it from there. Roulette's and
+Slots' identical copies are left where they are until somebody is in those files.
 
 **Blackjack is the one that drifts**: it is the oldest and improvements made while
 writing the other two were never carried back. On 2026-09-05 that cost a real bug --
@@ -185,10 +188,13 @@ ClientGameWorld : GameWorld`.
 
 ## Where the money is
 
-**All three tables move real roubles**, through escrow and the profile. There is no
-chip balance and nothing to cash out: a stake leaves the stash when it is committed and
-the return is paid straight back in, with anything the stash will not take posted as
-mail.
+**Every table moves real roubles**, through escrow and the profile. There is no chip
+balance and nothing to cash out: a stake leaves the stash when it is committed and the
+return is paid straight back in, with anything the stash will not take posted as mail.
+Farkle is the one table where a player's loss is another player's credit: each seat's
+stake is escrowed against its own session at sit-down and the winner is paid both at
+settlement -- **standing up mid-match is a forfeit and pays both to the player who
+stayed**, a named rule with its own money test.
 
 Roulette's is the newest and the most carefully checked: 13 money tests written
 **before** the settlement they check, then mutation-tested against eight deliberate

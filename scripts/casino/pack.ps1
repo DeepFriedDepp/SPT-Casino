@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 # Two levels up: this sits in scripts/<mod>/.
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
-$version = '1.3.0'
+$version = '1.4.0'
 
 # What the download is called. Deliberately not $version: the plugin carries a
 # three-part version because BepInEx expects one, and the release is named the way it
@@ -47,7 +47,7 @@ $version = '1.3.0'
 # archives are not interchangeable: they differ in target framework, in the SptVersion
 # gate, and in which folder the server half unpacks into. One name over two builds is
 # how somebody ends up with a mod that loads and answers nothing.
-$release = '1.3.0-SPT4.0.13'
+$release = '1.4.0-SPT4.0.13'
 $tables = @('Blackjack', 'Poker', 'Roulette', 'SlotMachine', 'Farkle')
 
 # Where SPT keeps its server mods, RELATIVE TO THE INSTALL ROOT.
