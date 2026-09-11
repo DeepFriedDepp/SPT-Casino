@@ -272,9 +272,16 @@ namespace SlotMachine.Client
                 {
                     // No session, no renderer -- usually "not yet". Ask again next time
                     // the panel opens, but not for ever.
+                    //
+                    // **continue, not break.** This used to stop the whole pass on the
+                    // first symbol that could not be drawn, so one bad symbol -- or the
+                    // game simply not being ready yet on the pass that happened to test
+                    // the first reel -- meant the other eight were never even attempted,
+                    // and three such passes abandoned all nine for the rest of the
+                    // session. Every symbol earns its own MaxAttempts now.
                     Asked.Remove(symbol);
                     unable = true;
-                    break;
+                    continue;
                 }
 
                 while (!task.IsCompleted)

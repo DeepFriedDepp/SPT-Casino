@@ -1,6 +1,9 @@
 using System;
+using System.Reflection;
 using Comfort.Common;
+using EFT;
 using EFT.UI;
+using SPT.Reflection.Utils;
 
 namespace Casino.Shared
 {
@@ -60,11 +63,26 @@ namespace Casino.Shared
         {
             try
             {
-                var session = ItemUiContext.Instance?.ClientSession;
+                // `ItemUiContext` is built by the inventory screens, not by the menu: walk
+                // from the task bar straight into the casino without opening a stash first
+                // and there is no instance. This used to give up here and say nothing --
+                // deliberately, to avoid a log line every frame.
+                //
+                // **The cost of that silence was the whole bug it was hiding.** The money
+                // had already moved on the server, but nothing ever asked the client to
+                // collect the changes, so the stash on screen never budged and the table
+                // looked like it was playing for nothing. No warning said so.
+                //
+                // The application always has a session while a profile is loaded, and it
+                // is the same object the inventory screens hand back.
+                var session = OrMainApp(ItemUiContext.Instance?.ClientSession);
+
                 if (session == null)
                 {
-                    // No session outside the menu, which is the only place the table
-                    // opens. Nothing to sync to, and nothing worth logging every frame.
+                    WarnOnce(
+                        "[Casino] there is no session to sync against, so the stash on screen "
+                        + "will read stale until the game reloads. The money itself has moved.");
+
                     return;
                 }
 
@@ -77,6 +95,82 @@ namespace Casino.Shared
                 // the game reloads, which is exactly where this started.
                 Host.Error($"[Casino] could not ask the game to resync: {error}");
             }
+        }
+
+        /// <summary>
+        /// The session the inventory screens had, or the running application's if they
+        /// were never opened.
+        ///
+        /// ## Why this is generic, and why it never names the session type
+        ///
+        /// Backported from upstream, where the equivalent is declared as returning
+        /// `IClientSession`. **That type does not exist on SPT 4.0.13's EFT**, so the
+        /// upstream file does not compile here at all -- which is the ordinary shape of
+        /// every backport in this repo and not a fault in theirs.
+        ///
+        /// Taking the current session as an argument means the compiler infers what it is
+        /// from the property it came from, so the type is never written down. That is
+        /// worth more than dodging one version difference: upstream's own notes record
+        /// `GetClientBackEndSession` returning a class the obfuscator had renamed to a
+        /// private-use glyph, which put a typeref in their assembly that only resolved
+        /// against the exact `Assembly-CSharp.dll` it was built on --
+        ///
+        ///     TypeLoadException: Could not resolve type with token 01000068 from typeref
+        ///
+        /// -- and they reached for reflection to keep the name out. Inferring it keeps out
+        /// the name they still had to write at the boundary as well.
+        ///
+        /// `TarkovApplication` is a real name and survives obfuscation; only the method's
+        /// return type had to be described rather than named. `GetMethod` walks base
+        /// types, which is where the method is actually declared.
+        /// </summary>
+        private static T OrMainApp<T>(T current)
+            where T : class
+        {
+            if (current != null)
+            {
+                return current;
+            }
+
+            try
+            {
+                var app = ClientAppUtils.GetMainApp();
+
+                // Unity's ==, not a raw null check: a torn-down application is not null
+                // to one. See CLAUDE.md on Comfort's Singleton.
+                if (app == null)
+                {
+                    return null;
+                }
+
+                return typeof(TarkovApplication)
+                    .GetMethod("GetClientBackEndSession", BindingFlags.Public | BindingFlags.Instance)
+                    ?.Invoke(app, null) as T;
+            }
+            catch (Exception error)
+            {
+                // A missing method on a game build we were not compiled against is a
+                // stale stash, not a crash. The money has already moved.
+                Host.Error($"[Casino] could not reach the application's session: {error}");
+                return null;
+            }
+        }
+
+        private static bool _warned;
+
+        /// <summary>
+        /// Says it the first time and then stops. Once per session is a bug report; once
+        /// per spin is a reason to stop reading the log.
+        /// </summary>
+        private static void WarnOnce(string message)
+        {
+            if (_warned)
+            {
+                return;
+            }
+
+            _warned = true;
+            Host.Warn(message);
         }
 
         private static void OnSynced(IResult result)

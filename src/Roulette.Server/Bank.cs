@@ -376,6 +376,17 @@ public class Bank(
         }
     }
 
+    /// <summary>
+    /// Every stack of this currency **that is in the stash** -- loose, or nested inside a
+    /// container that is itself in the stash.
+    ///
+    /// Deliberately excludes pockets, the secure container, backpack and rig. Matching on
+    /// template alone drew a stake from whichever stack turned up first, and
+    /// `Inventory.Items` is in no particular order, so a bet could empty gear the player
+    /// was about to carry into a raid. See <see cref="Casino.Server.StashScope"/>.
+    /// </summary>
     private static IEnumerable<Item> StacksOf(PmcData pmcData, MongoId tpl) =>
-        pmcData.Inventory?.Items?.Where(item => item.Template == tpl) ?? [];
+        Casino.Server.StashScope.InStash(
+            pmcData,
+            pmcData.Inventory?.Items?.Where(item => item.Template == tpl) ?? []);
 }
