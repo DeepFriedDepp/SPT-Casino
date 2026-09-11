@@ -757,21 +757,27 @@ namespace Farkle.Client
                 _shownTurn = turnNumber;
                 _shownCount = turn.Count;
             }
-            else if (lastTurnNumber == _shownTurn && lastTurnNumber != turnNumber)
+            else if (lastTurnNumber >= _shownTurn)
             {
-                // The turn we were watching has ended since we last looked. Finish showing
-                // it, then start on the new one.
-                EnqueueFrom(lastTurn, _shownCount);
-                _shownTurn = turnNumber;
-                _shownCount = 0;
-                EnqueueFrom(turn, 0);
-                _shownCount = turn.Count;
-            }
-            else if (lastTurnNumber == _shownTurn && lastTurnNumber == turnNumber)
-            {
-                // Finished: the last turn IS the current turn, and it ended the match.
-                EnqueueFrom(lastTurn, _shownCount);
-                _shownCount = lastTurn.Count;
+                // The last completed turn is the one we were watching, or a later one. The
+                // usual "later" case is a bot: our bank ends our turn and the bot's whole turn
+                // is played inside the same reply, so the reply arrives two turns on from
+                // what we last showed. Its LastTurn is the bot's turn, whole, and every event
+                // of it is new to us. Our own turn's events are skipped by seat either way.
+                EnqueueFrom(lastTurn, lastTurnNumber == _shownTurn ? _shownCount : 0);
+
+                if (lastTurnNumber == turnNumber)
+                {
+                    // Finished: the last turn IS the current turn, and it ended the match.
+                    _shownTurn = turnNumber;
+                    _shownCount = lastTurn.Count;
+                }
+                else
+                {
+                    _shownTurn = turnNumber;
+                    EnqueueFrom(turn, 0);
+                    _shownCount = turn.Count;
+                }
             }
             else if (turnNumber == _shownTurn)
             {
@@ -780,12 +786,8 @@ namespace Farkle.Client
             }
             else
             {
-                // More than one turn went by unseen, or the numbers do not line up. Show
-                // the present rather than guess at the past.
-                _pending.Clear();
-                _stage = null;
-                _shownTurn = turnNumber;
-                _shownCount = turn.Count;
+                // A view older than what is on screen. Nothing to show from it.
+                return;
             }
 
             if (_pending.Count > 0)
@@ -851,6 +853,26 @@ namespace Farkle.Client
                     _stage["Winner"] = null;
                     _stage["Ending"] = "None";
                     _stage["DiceInHand"] = 6;
+
+                    // The latest view may already hold the bank this turn ends with -- it
+                    // does whenever the turn arrived whole. Take that bank back off the
+                    // stage's score, so showing the bank later adds it once, not twice.
+                    var seats = _stage["Seats"] as JArray;
+
+                    if (seats != null && seat < seats.Count)
+                    {
+                        var alreadyBanked = 0;
+
+                        foreach (var queued in new[] { e }.Concat(_pending))
+                        {
+                            if (queued.Value<string>("Kind") == "Banked" && queued.Value<int?>("Seat") == seat)
+                            {
+                                alreadyBanked += queued.Value<int?>("Points") ?? 0;
+                            }
+                        }
+
+                        seats[seat]["Score"] = Math.Max(0, (seats[seat].Value<int?>("Score") ?? 0) - alreadyBanked);
+                    }
                 }
 
                 _view = _stage;
