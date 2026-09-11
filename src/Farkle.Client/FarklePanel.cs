@@ -61,7 +61,7 @@ namespace Farkle.Client
         private static TMP_FontAsset _font;
         private static Coroutine _fade;
         private static Coroutine _poll;
-        private static Coroutine _replay;
+        private static Coroutine _animation;
         private static bool _closing;
         private static Action<string> _listener;
 
@@ -73,7 +73,16 @@ namespace Farkle.Client
         private static long _stake = 50_000;
         private static int _botIndex;
         private static int _targetIndex = -1;
-        private static string _replayedTurn;
+
+        // The other seat's turn, as it is shown. Events already drawn are counted per turn
+        // so a push, a poll and a route reply can all arrive with overlapping views and
+        // nothing is shown twice or skipped.
+        private static int _shownTurn = -1;
+        private static int _shownCount;
+        private static readonly Queue<JObject> _pending = new Queue<JObject>();
+        private static JObject _latest;
+        private static JObject _stage;
+        private static readonly List<int> _replaySelected = new List<int>();
 
         // The frame's pieces.
         private static RectTransform _frame;
@@ -170,7 +179,7 @@ namespace Farkle.Client
             ProfileSync.Request(SyncAction);
 
             StopPolling();
-            StopReplay();
+            StopAnimation();
             Deafen();
 
             _closing = true;
@@ -187,8 +196,10 @@ namespace Farkle.Client
         private static void ShowLobby(JObject tables)
         {
             StopPolling();
-            StopReplay();
+            StopAnimation();
             _tableId = null;
+            _shownTurn = -1;
+            _shownCount = 0;
             _mySeat = null;
             _view = null;
             _selected.Clear();
@@ -456,13 +467,16 @@ namespace Farkle.Client
                 _stake = stake.Value;
             }
 
-            if (replay && ShouldReplay(view))
+            if (replay)
             {
-                StopReplay();
-                _replay = FarkleClientPlugin.Instance.StartCoroutine(Replay(view));
+                Absorb(view);
                 return;
             }
 
+            // A fresh start: whatever has happened so far is history, not a replay.
+            StopAnimation();
+            _shownTurn = view.Value<int?>("TurnNumber") ?? 0;
+            _shownCount = (view["Turn"] as JArray)?.Count ?? 0;
             _view = view;
             Draw();
         }
@@ -602,7 +616,7 @@ namespace Farkle.Client
             for (var i = 0; i < roll.Count; i++)
             {
                 var face = roll[i].Value<int>();
-                var selected = _selected.Contains(i);
+                var selected = MyTurn() ? _selected.Contains(i) : _replaySelected.Contains(i);
                 var die = BuildDie(_diceRow, face, DieSize, selected ? Gold : keepable.Contains(i) && MyTurn() ? Edge : new Color(0.3f, 0.3f, 0.3f, 1f), selected ? 4 : 2);
                 die.anchoredPosition = new Vector2(left + i * (DieSize + DieGap), 0f);
 
@@ -717,108 +731,255 @@ namespace Farkle.Client
         // ------------------------------------------------------------------ replaying
 
         /// <summary>
-        /// A turn worth stepping through: the other seat's, complete, and not yet shown.
-        /// Identified by the turn number it ended, which the view carries.
+        /// Takes in a view and shows whatever the other seat has done since the last one,
+        /// one event at a time, at a pace a person can follow.
+        ///
+        /// Both kinds of opponent come through here. A bot's whole turn arrives at once in
+        /// `LastTurn`, because the server plays it inside the request that ended ours. A
+        /// human's turn arrives a push at a time in `Turn`. Either way the events not yet
+        /// shown are queued, and the queue is drawn out with pauses: the roll lands in the
+        /// dice row exactly as ours does, the dice being taken light up gold for a second,
+        /// then they move to the set-aside row. Our own moves are never replayed; we made
+        /// them.
         /// </summary>
-        private static bool ShouldReplay(JObject view)
+        private static void Absorb(JObject view)
         {
-            var last = view["LastTurn"] as JArray;
+            _latest = view;
 
-            if (last == null || last.Count == 0 || !_mySeat.HasValue)
+            var turnNumber = view.Value<int?>("TurnNumber") ?? 0;
+            var lastTurnNumber = view.Value<int?>("LastTurnNumber") ?? 0;
+            var turn = view["Turn"] as JArray ?? new JArray();
+            var lastTurn = view["LastTurn"] as JArray ?? new JArray();
+
+            if (_shownTurn < 0)
             {
-                return false;
+                // First view of this table. Nothing to catch up on.
+                _shownTurn = turnNumber;
+                _shownCount = turn.Count;
+            }
+            else if (lastTurnNumber == _shownTurn && lastTurnNumber != turnNumber)
+            {
+                // The turn we were watching has ended since we last looked. Finish showing
+                // it, then start on the new one.
+                EnqueueFrom(lastTurn, _shownCount);
+                _shownTurn = turnNumber;
+                _shownCount = 0;
+                EnqueueFrom(turn, 0);
+                _shownCount = turn.Count;
+            }
+            else if (lastTurnNumber == _shownTurn && lastTurnNumber == turnNumber)
+            {
+                // Finished: the last turn IS the current turn, and it ended the match.
+                EnqueueFrom(lastTurn, _shownCount);
+                _shownCount = lastTurn.Count;
+            }
+            else if (turnNumber == _shownTurn)
+            {
+                EnqueueFrom(turn, _shownCount);
+                _shownCount = turn.Count;
+            }
+            else
+            {
+                // More than one turn went by unseen, or the numbers do not line up. Show
+                // the present rather than guess at the past.
+                _pending.Clear();
+                _stage = null;
+                _shownTurn = turnNumber;
+                _shownCount = turn.Count;
             }
 
-            var seat = last[0].Value<int?>("Seat");
-            var key = (view.Value<int?>("TurnNumber") ?? 0) + ":" + seat;
-
-            if (seat == _mySeat.Value || key == _replayedTurn)
+            if (_pending.Count > 0)
             {
-                return false;
+                if (_animation == null && FarkleClientPlugin.Instance != null)
+                {
+                    _animation = FarkleClientPlugin.Instance.StartCoroutine(Animate());
+                }
+
+                return;
             }
 
-            // Only a turn that just ended. A stale view arriving late has a LastTurn too.
-            return _view == null || (_view.Value<int?>("TurnNumber") ?? 0) != (view.Value<int?>("TurnNumber") ?? 0);
+            if (_animation == null)
+            {
+                _view = view;
+                Draw();
+            }
         }
 
-        private static IEnumerator Replay(JObject view)
+        /// <summary>Queues the other seat's events from an index on. Ours are skipped.</summary>
+        private static void EnqueueFrom(JArray events, int from)
         {
-            var last = (JArray)view["LastTurn"];
-            var seat = last[0].Value<int?>("Seat");
-            _replayedTurn = (view.Value<int?>("TurnNumber") ?? 0) + ":" + seat;
-
-            // Draw the opponent's turn on our own frame, event by event, on a copy of the
-            // view whose roll and set-aside follow the events.
-            var staged = (JObject)view.DeepClone();
-            staged["Phase"] = "Rolling";
-            staged["CurrentSeat"] = seat;
-            staged["Keeps"] = new JArray();
-            staged["Roll"] = new JArray();
-            staged["SetAside"] = new JArray();
-            staged["TurnScore"] = 0;
-            staged["Turn"] = new JArray();
-            staged["Winner"] = null;
-            staged["Ending"] = "None";
-            var aside = new JArray();
-            var turnScore = 0;
-
-            _view = staged;
-
-            foreach (var token in last)
+            for (var i = from; i < events.Count; i++)
             {
-                var e = (JObject)token;
+                var e = events[i] as JObject;
+
+                if (e == null)
+                {
+                    continue;
+                }
+
+                if (_mySeat.HasValue && e.Value<int?>("Seat") == _mySeat.Value)
+                {
+                    continue;
+                }
+
+                _pending.Enqueue(e);
+            }
+        }
+
+        private static IEnumerator Animate()
+        {
+            while (_pending.Count > 0)
+            {
+                var e = _pending.Dequeue();
                 var kind = e.Value<string>("Kind");
                 var dice = e["Dice"] as JArray ?? new JArray();
+                var seat = e.Value<int?>("Seat") ?? 0;
+
+                if (_stage == null)
+                {
+                    // Their turn as it stood before this event: our latest view, with the
+                    // table cleared. Scores are left as the latest view has them; a bank
+                    // shows its new total when the bank is shown.
+                    _stage = (JObject)(_latest ?? _view).DeepClone();
+                    _stage["Phase"] = "Rolling";
+                    _stage["CurrentSeat"] = seat;
+                    _stage["Keeps"] = new JArray();
+                    _stage["Roll"] = new JArray();
+                    _stage["SetAside"] = new JArray();
+                    _stage["TurnScore"] = 0;
+                    _stage["Turn"] = new JArray();
+                    _stage["Winner"] = null;
+                    _stage["Ending"] = "None";
+                    _stage["DiceInHand"] = 6;
+                }
+
+                _view = _stage;
 
                 switch (kind)
                 {
                     case "Rolled":
-                        staged["Roll"] = new JArray(dice);
-                        staged["Phase"] = "Choosing";
-                        break;
                     case "Farkled":
-                        staged["Roll"] = new JArray(dice);
-                        staged["Phase"] = "Choosing";
+                        _stage["Roll"] = new JArray(dice);
+                        _stage["Phase"] = "Choosing";
+                        _replaySelected.Clear();
+                        ((JArray)_stage["Turn"]).Add(e);
+                        Draw();
+                        _turnNote.text = e.Value<string>("Note") ?? string.Empty;
+                        _turnNote.color = kind == "Farkled" ? Bad : Ink;
+
+                        yield return new WaitForSecondsRealtime(kind == "Farkled" ? 1.8f : 1.2f);
                         break;
+
                     case "Kept":
+                    {
+                        // First the choice: the dice being taken light up on the roll, the
+                        // way ours do when we pick them. Then the result.
+                        var indices = e["Indices"] as JArray;
+                        _replaySelected.Clear();
+
+                        if (indices != null)
+                        {
+                            foreach (var index in indices)
+                            {
+                                _replaySelected.Add(index.Value<int>());
+                            }
+                        }
+
+                        RenderDice();
+                        _turnNote.text = e.Value<string>("Note") ?? string.Empty;
+                        _turnNote.color = Ink;
+
+                        yield return new WaitForSecondsRealtime(1.1f);
+
+                        var aside = _stage["SetAside"] as JArray ?? new JArray();
+
                         foreach (var d in dice)
                         {
                             aside.Add(d.Value<int>());
                         }
 
-                        turnScore += e.Value<int?>("Points") ?? 0;
-                        staged["SetAside"] = new JArray(aside);
-                        staged["TurnScore"] = turnScore;
-                        staged["Roll"] = new JArray();
-                        staged["Phase"] = "Rolling";
+                        _stage["SetAside"] = aside;
+                        _stage["TurnScore"] = (_stage.Value<int?>("TurnScore") ?? 0) + (e.Value<int?>("Points") ?? 0);
+                        _stage["DiceInHand"] = Math.Max(0, (_stage.Value<int?>("DiceInHand") ?? 6) - dice.Count);
+                        _stage["Roll"] = new JArray();
+                        _stage["Phase"] = "Rolling";
+                        _replaySelected.Clear();
+                        ((JArray)_stage["Turn"]).Add(e);
+                        Draw();
+
+                        yield return new WaitForSecondsRealtime(0.6f);
                         break;
+                    }
+
                     case "HotDice":
-                        staged["Roll"] = new JArray();
+                        _stage["DiceInHand"] = 6;
+                        ((JArray)_stage["Turn"]).Add(e);
+                        Draw();
+                        _turnNote.text = e.Value<string>("Note") ?? string.Empty;
+                        _turnNote.color = Gold;
+
+                        yield return new WaitForSecondsRealtime(1.0f);
+                        break;
+
+                    case "Banked":
+                    case "Yielded":
+                    {
+                        var seats = _stage["Seats"] as JArray;
+
+                        if (seats != null && seat < seats.Count && kind == "Banked")
+                        {
+                            seats[seat]["Score"] = (seats[seat].Value<int?>("Score") ?? 0) + (e.Value<int?>("Points") ?? 0);
+                        }
+
+                        _stage["Roll"] = new JArray();
+                        ((JArray)_stage["Turn"]).Add(e);
+                        Draw();
+                        _turnNote.text = e.Value<string>("Note") ?? string.Empty;
+                        _turnNote.color = Good;
+
+                        yield return new WaitForSecondsRealtime(1.4f);
+                        break;
+                    }
+
+                    default:
+                        ((JArray)_stage["Turn"]).Add(e);
+                        Draw();
+                        _turnNote.text = e.Value<string>("Note") ?? string.Empty;
+
+                        yield return new WaitForSecondsRealtime(1.0f);
                         break;
                 }
 
-                ((JArray)staged["Turn"]).Add(e);
-                Draw();
-                _turnNote.text = e.Value<string>("Note") ?? string.Empty;
-                _turnNote.color = kind == "Farkled" ? Bad : kind == "Banked" ? Good : Ink;
-
-                yield return new WaitForSecondsRealtime(kind == "Rolled" ? 1.3f : kind == "Kept" ? 0.9f : 1.4f);
+                // A bank, a farkle, a yield, a forfeit or a win ends their turn: the next
+                // event, if any, starts on a clean stage.
+                if (kind == "Banked" || kind == "Farkled" || kind == "Yielded" || kind == "Forfeited" || kind == "Won")
+                {
+                    _stage = null;
+                }
             }
 
-            _replay = null;
-            _view = view;
+            _animation = null;
+            _replaySelected.Clear();
             _turnNote.color = Ink;
-            Draw();
+
+            if (_latest != null)
+            {
+                _view = _latest;
+                Draw();
+            }
         }
 
-        private static void StopReplay()
+        private static void StopAnimation()
         {
-            if (_replay != null && FarkleClientPlugin.Instance != null)
+            if (_animation != null && FarkleClientPlugin.Instance != null)
             {
-                FarkleClientPlugin.Instance.StopCoroutine(_replay);
+                FarkleClientPlugin.Instance.StopCoroutine(_animation);
             }
 
-            _replay = null;
+            _animation = null;
+            _pending.Clear();
+            _stage = null;
+            _replaySelected.Clear();
         }
 
         // ------------------------------------------------------------------ hearing
@@ -920,7 +1081,7 @@ namespace Farkle.Client
             {
                 yield return new WaitForSecondsRealtime(4f);
 
-                if (!IsOpen || _tableId == null || _replay != null)
+                if (!IsOpen || _tableId == null || _animation != null)
                 {
                     continue;
                 }

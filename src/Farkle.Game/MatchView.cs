@@ -4,7 +4,7 @@ namespace Farkle.Game;
 public sealed record SeatView(int Index, string Name, bool IsBot, bool Occupied, int Score);
 
 /// <summary>One thing that happened, as the client replays it. Kind travels as a string.</summary>
-public sealed record TurnEventView(int Seat, string Kind, IReadOnlyList<int> Dice, int Points, string Note);
+public sealed record TurnEventView(int Seat, string Kind, IReadOnlyList<int> Dice, IReadOnlyList<int> Indices, int Points, string Note);
 
 /// <summary>A keep the current roll allows, so the client can light up what may be set aside.</summary>
 public sealed record KeepView(IReadOnlyList<int> Indices, int Points, IReadOnlyList<string> Parts);
@@ -28,6 +28,7 @@ public sealed record MatchView(
     bool CanBank,
     int Target,
     int TurnNumber,
+    int LastTurnNumber,
     int? Winner,
     string Ending,
     IReadOnlyList<TurnEventView> Turn,
@@ -47,10 +48,11 @@ public sealed record MatchView(
         match.CanBank,
         match.Rules.Target,
         match.TurnNumber,
+        match.LastTurnNumber,
         match.Winner,
         match.Ending.ToString(),
         match.Turn.Select(Event).ToList(),
         match.LastTurn.Select(Event).ToList());
 
-    private static TurnEventView Event(TurnEvent e) => new(e.Seat, e.Kind.ToString(), e.Dice, e.Points, e.Note);
+    private static TurnEventView Event(TurnEvent e) => new(e.Seat, e.Kind.ToString(), e.Dice, e.Indices, e.Points, e.Note);
 }

@@ -56,7 +56,19 @@ public sealed class Seat(int index)
 }
 
 /// <summary>Something that happened in a turn, as the client replays it.</summary>
-public sealed record TurnEvent(int Seat, TurnEventKind Kind, IReadOnlyList<int> Dice, int Points, string Note);
+/// <param name="Dice">The faces involved: the roll for a roll or a farkle, the kept faces for a keep.</param>
+/// <param name="Indices">
+/// For a keep, WHICH dice of the showing roll were taken, by position. A client replaying
+/// the other seat's turn lights those up before moving them aside, so the watcher sees the
+/// choice rather than only its result. Empty for every other kind.
+/// </param>
+public sealed record TurnEvent(
+    int Seat,
+    TurnEventKind Kind,
+    IReadOnlyList<int> Dice,
+    IReadOnlyList<int> Indices,
+    int Points,
+    string Note);
 
 public enum TurnEventKind
 {
@@ -160,6 +172,13 @@ public sealed class FarkleMatch
     public IReadOnlyList<TurnEvent> LastTurn => _lastTurn;
 
     public int TurnNumber { get; private set; }
+
+    /// <summary>
+    /// Which turn <see cref="LastTurn"/> is. Usually one less than <see cref="TurnNumber"/>,
+    /// but equal to it once the match has finished, because finishing does not start a
+    /// new turn. A client that replays turns keys on this rather than guessing.
+    /// </summary>
+    public int LastTurnNumber { get; private set; }
 
     public Seat Current => _seats[CurrentSeat];
 
@@ -272,7 +291,12 @@ public sealed class FarkleMatch
         TurnScore += scored.Points;
         _setAside.AddRange(faces);
         DiceInHand -= indices.Count;
-        Record(TurnEventKind.Kept, faces, scored.Points, $"{Current.Name} set aside {Faces(faces)} for {scored.Points:N0}. Turn: {TurnScore:N0}.");
+        Record(
+            TurnEventKind.Kept,
+            faces,
+            scored.Points,
+            $"{Current.Name} set aside {Faces(faces)} for {scored.Points:N0}. Turn: {TurnScore:N0}.",
+            indices: indices);
 
         if (DiceInHand == 0)
         {
@@ -382,6 +406,7 @@ public sealed class FarkleMatch
         }
 
         _lastTurn = _turn.ToList();
+        LastTurnNumber = TurnNumber;
         _turn.Clear();
         _setAside.Clear();
         _roll = [];
@@ -399,12 +424,19 @@ public sealed class FarkleMatch
         Phase = Phase.Finished;
         Record(TurnEventKind.Won, [], _seats[winner].Score, $"{_seats[winner].Name} wins, {_seats[winner].Score:N0} to {Other(winner).Score:N0}.", winner);
         _lastTurn = _turn.ToList();
+        LastTurnNumber = TurnNumber;
         _roll = [];
     }
 
-    private void Record(TurnEventKind kind, IReadOnlyList<int> dice, int points, string note, int? seat = null)
+    private void Record(
+        TurnEventKind kind,
+        IReadOnlyList<int> dice,
+        int points,
+        string note,
+        int? seat = null,
+        IReadOnlyList<int>? indices = null)
     {
-        _turn.Add(new TurnEvent(seat ?? CurrentSeat, kind, dice.ToList(), points, note));
+        _turn.Add(new TurnEvent(seat ?? CurrentSeat, kind, dice.ToList(), indices?.ToList() ?? [], points, note));
         Say(note);
     }
 
